@@ -1,0 +1,38 @@
+name: Build Interface.dylib
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Interface.m"
+      - "AudioChipmunk.m"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Clonar repo
+        uses: actions/checkout@v4
+
+      - name: Mostrar SDKs disponibles
+        run: xcodebuild -showsdks
+
+      - name: Compilar dylib (arm64, iOS)
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -dynamiclib -arch arm64 \
+            -isysroot "$SDK" \
+            -mios-version-min=14.0 \
+            Interface.m AudioChipmunk.m -o Interface.dylib \
+            -framework UIKit -framework Foundation -framework AudioToolbox \
+            -fobjc-arc
+
+      - name: Firmar ad-hoc (ESign/resigner lo volverá a firmar igual)
+        run: codesign -s - Interface.dylib
+
+      - name: Subir dylib como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: Interface-dylib
+          path: Interface.dylib
