@@ -25,7 +25,7 @@ jobs:
             -isysroot "$SDK" \
             -mios-version-min=14.0 \
             Interface.m AudioChipmunk.m -o Interface.dylib \
-            -framework UIKit -framework Foundation -framework AudioToolbox \
+            -framework UIKit -framework Foundation -framework AudioToolbox -framework CoreGraphics \
             -fobjc-arc
 
       - name: Firmar ad-hoc (ESign/resigner lo volverá a firmar igual)
