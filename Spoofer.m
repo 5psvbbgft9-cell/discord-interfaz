@@ -1,26 +1,19 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
-#import <sys/sysctl.h>
+#import <sys/utsname.h>
 #import "Comun.h"
 
-static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t) = sysctlbyname;
-
-static int my_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
-    if (strcmp(name, "hw.machine") == 0) {
-        const char *fakeMachine = "iPhone14,5"; 
-        if (gSpooferMode == 1) fakeMachine = "x86_64"; 
-        else if (gSpooferMode == 2) fakeMachine = "Oculus Quest 2"; 
-        else if (gSpooferMode == 3) fakeMachine = "SM-G998B"; 
-        
-        size_t len = strlen(fakeMachine) + 1;
-        if (oldp && oldlenp && *oldlenp >= len) {
-            memcpy(oldp, fakeMachine, len);
-            *oldlenp = len;
-            return 0;
-        }
+// 1. Interceptar uname() (Usado por React Native para leer el hardware)
+static int (*orig_uname)(struct utsname *) = uname;
+int hook_uname(struct utsname *buf) {
+    int res = orig_uname(buf);
+    if (res == 0 && buf) {
+        if (gSpooferMode == 1) strcpy(buf->machine, "x86_64");      // PC
+        else if (gSpooferMode == 2) strcpy(buf->machine, "Oculus Quest 2"); // VR
+        else if (gSpooferMode == 3) strcpy(buf->machine, "SM-G998B");       // Android
     }
-    return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
+    return res;
 }
 
 #define DYLD_INTERPOSE(_replacement, _replacee) \
@@ -30,8 +23,9 @@ __attribute__((used)) static struct { \
 } _interpose_##_replacee __attribute__((section("__DATA,__interpose"))) = \
     { (const void *)(unsigned long)&_replacement, (const void *)(unsigned long)&_replacee };
 
-DYLD_INTERPOSE(my_sysctlbyname, sysctlbyname)
+DYLD_INTERPOSE(hook_uname, uname)
 
+// 2. Interceptar UIDevice
 @implementation UIDevice (Spoofer)
 + (void)load {
     static dispatch_once_t onceToken;
