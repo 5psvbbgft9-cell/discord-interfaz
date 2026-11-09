@@ -8,7 +8,10 @@ extern float gPitchAmount;
 extern BOOL gMuteMicOnPlay;
 extern BOOL gSelfMonitor;
 
-// Variables del Spoofer (0=iOS, 1=PC, 2=VR, 3=Android)
+// Reproductor MP3 (Compartido entre Interface y AudioEngine)
+extern AVAudioPlayer *gMP3Player;
+
+// Variables del Spoofer
 extern int gSpooferMode;
 
 // Funciones de Audio
