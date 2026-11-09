@@ -1,11 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-
-extern float gGainDB, gPitchAmount;
-extern BOOL gMuteMic;
-void CargarMP3(NSURL *url);
-void PlayMP3(void);
-void StopMP3(void);
+#import "Comun.h"
 
 @interface PanelRosa : UIView <UIDocumentPickerDelegate>
 @end
@@ -35,7 +30,6 @@ void StopMP3(void);
         y = [self addSlider:@"Gain (dB)" min:-20 max:100 def:0 tag:1 y:y];
         y = [self addSlider:@"Pitch (Tono)" min:0.5 max:2.0 def:1.0 tag:2 y:y];
         
-        // Botones MP3
         UIButton *btnLoad = [UIButton buttonWithType:UIButtonTypeSystem];
         btnLoad.frame = CGRectMake(20, y, 100, 40); [btnLoad setTitle:@"Cargar MP3" forState:UIControlStateNormal];
         [btnLoad setBackgroundColor:[UIColor darkGrayColor]]; [btnLoad setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -80,7 +74,7 @@ void StopMP3(void);
 }
 
 - (void)sliderChanged:(UISlider *)s { if (s.tag == 1) gGainDB = s.value; if (s.tag == 2) gPitchAmount = s.value; }
-- (void)switchChanged:(UISwitch *)s { if (s.tag == 3) gMuteMic = s.isOn; }
+- (void)switchChanged:(UISwitch *)s { if (s.tag == 3) gMuteMicOnPlay = s.isOn; }
 - (void)abrirPicker { UIDocumentPickerViewController *p = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio]]; p.delegate = self; [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:p animated:YES completion:nil]; }
 - (void)documentPicker:(UIDocumentPickerViewController *)c didPickDocumentsAtURLs:(NSArray<NSURL *> *)u { if (u.count) CargarMP3(u.firstObject); }
 - (void)play { PlayMP3(); }
@@ -88,4 +82,67 @@ void StopMP3(void);
 - (void)ocultar { [UIView animateWithDuration:0.3 animations:^{ self.transform = CGAffineTransformMakeTranslation(0, self.bounds.size.height); }]; }
 @end
 
-// (El código de la bolita y la inyección se mantiene igual al anterior, pégalo aquí abajo)
+@interface Bolita : UIButton
+@property (nonatomic, strong) PanelRosa *panel;
+@end
+
+@implementation Bolita
+- (instancetype)init {
+    self = [super initWithFrame:CGRectMake(20, 150, 60, 60)];
+    if (self) {
+        self.backgroundColor = [UIColor colorWithRed:1.0 green:0.2 blue:0.5 alpha:1.0];
+        self.layer.cornerRadius = 30;
+        self.layer.shadowColor = [UIColor blackColor].CGColor;
+        self.layer.shadowOpacity = 0.5;
+        self.layer.shadowOffset = CGSizeMake(0, 5);
+        self.layer.shadowRadius = 10;
+        [self setTitle:@"✨" forState:UIControlStateNormal];
+        self.titleLabel.font = [UIFont systemFontOfSize:28];
+        [self addTarget:self action:@selector(tocado) forControlEvents:UIControlEventTouchUpInside];
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(arrastrar:)];
+        [self addGestureRecognizer:pan];
+    }
+    return self;
+}
+- (void)arrastrar:(UIPanGestureRecognizer *)gesture {
+    UIView *superview = self.superview; if (!superview) return;
+    CGPoint translation = [gesture translationInView:superview];
+    self.center = CGPointMake(self.center.x + translation.x, self.center.y + translation.y);
+    [gesture setTranslation:CGPointZero inView:superview];
+}
+- (void)tocado {
+    UIWindow *window = self.window; if (!window) return;
+    if (!self.panel) {
+        CGFloat alto = 500;
+        self.panel = [[PanelRosa alloc] initWithFrame:CGRectMake(20, window.bounds.size.height, window.bounds.size.width - 40, alto)];
+        self.panel.center = CGPointMake(window.center.x, window.bounds.size.height + alto/2);
+        [window addSubview:self.panel];
+    }
+    if (self.panel.transform.ty == 0) {
+        [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5 options:0 animations:^{
+            self.panel.center = CGPointMake(window.center.x, window.center.y);
+        } completion:nil];
+    } else {
+        [UIView animateWithDuration:0.3 animations:^{
+            self.panel.center = CGPointMake(window.center.x, window.bounds.size.height + 250);
+        }];
+    }
+}
+@end
+
+__attribute__((constructor))
+static void Iniciar(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *window = [UIApplication sharedApplication].keyWindow;
+        if (!window) {
+            if (@available(iOS 13.0, *)) {
+                for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                    if (scene.activationState == UISceneActivationStateForegroundActive) {
+                        window = scene.windows.firstObject; break;
+                    }
+                }
+            }
+        }
+        if (window) { Bolita *b = [[Bolita alloc] init]; [window addSubview:b]; }
+    });
+}
