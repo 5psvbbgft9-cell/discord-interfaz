@@ -12,7 +12,6 @@ int gSpooferMode = 0;
 static SInt16 *mp3Samples = NULL;
 static long mp3TotalSamples = 0;
 static long mp3CurrentIndex = 0;
-static Float64 currentSampleRate = 48000.0; // Frecuencia por defecto
 
 #define PITCH_BUFFER_SIZE 8192
 static float pitchBuffer[PITCH_BUFFER_SIZE];
@@ -46,42 +45,48 @@ void CargarMP3(NSURL *url) {
     if (error) return;
 
     AVAudioFormat *fileFormat = file.processingFormat;
-    // Forzamos el MP3 a 48kHz Estéreo para que coincida con Discord
-    AVAudioFormat *targetFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32 sampleRate:currentSampleRate channels:2 interleaved:NO];
-    
-    AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:fileFormat toFormat:targetFormat];
-    
-    AVAudioPCMBuffer *inputBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fileFormat frameCapacity:(AVAudioFrameCount)file.length];
-    [file readIntoBuffer:inputBuffer error:&error];
-    
-    AVAudioFrameCount outputCapacity = inputBuffer.frameLength * (currentSampleRate / fileFormat.sampleRate);
-    AVAudioPCMBuffer *outputBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:targetFormat frameCapacity:outputCapacity];
-    
-    __block BOOL done = NO;
-    [converter convertToBuffer:outputBuffer error:&error withInputFromBlock:^AVAudioBuffer * _Nullable(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus * _Nonnull outStatus) {
-        if (done) {
-            *outStatus = AVAudioConverterInputStatus_EndOfStream;
-            return nil;
-        }
-        done = YES;
-        *outStatus = AVAudioConverterInputStatus_HaveData;
-        return inputBuffer;
-    }];
+    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fileFormat frameCapacity:(AVAudioFrameCount)file.length];
+    [file readIntoBuffer:buffer error:&error];
 
     if (mp3Samples) { free(mp3Samples); mp3Samples = NULL; }
     
-    mp3TotalSamples = outputBuffer.frameLength * 2; 
-    mp3Samples = (SInt16 *)malloc(mp3TotalSamples * sizeof(SInt16));
+    // CONVERSIÓN MANUAL A 48kHz (La solución al relentizado)
+    double targetRate = 48000.0; 
+    double sourceRate = fileFormat.sampleRate;
+    double ratio = sourceRate / targetRate;
     
-    float *leftCh = outputBuffer.floatChannelData[0];
-    float *rightCh = outputBuffer.floatChannelData[1];
+    long sourceLength = buffer.frameLength;
+    long targetLength = (long)(sourceLength / ratio) + 1;
     
-    for (long i = 0; i < outputBuffer.frameLength; i++) {
-        mp3Samples[i * 2]     = (SInt16)(leftCh[i] * 32767.0f);
-        mp3Samples[i * 2 + 1] = (SInt16)(rightCh[i] * 32767.0f);
+    mp3Samples = (SInt16 *)malloc(targetLength * sizeof(SInt16));
+    mp3TotalSamples = targetLength;
+    
+    // Tomamos el canal izquierdo (o mono) para inyectarlo al micrófono
+    float *floatData = buffer.floatChannelData[0]; 
+    
+    // Remuestreo con interpolación lineal
+    for (long i = 0; i < targetLength; i++) {
+        double srcIndex = i * ratio;
+        long idx1 = (long)srcIndex;
+        long idx2 = (idx1 + 1 < sourceLength) ? idx1 + 1 : idx1;
+        double frac = srcIndex - idx1;
+        
+        float s1 = floatData[idx1];
+        float s2 = floatData[idx2];
+        float sample = s1 * (1.0 - frac) + s2 * frac;
+        
+        mp3Samples[i] = (SInt16)(sample * 32767.0f);
     }
+    
     mp3CurrentIndex = 0;
     gIsMp3Playing = NO;
+    
+    // Limpiamos el buffer del pitch para que no haya ecos raros al cargar nueva canción
+    memset(pitchBuffer, 0, sizeof(pitchBuffer));
+    pitchWriteIdx = 0;
+    pitchReadIdxA = 0;
+    pitchReadIdxB = PITCH_BUFFER_SIZE / 2;
+    smoothSample = 0;
     InitPitch();
 }
 
@@ -119,13 +124,6 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
     
     if (status == noErr && inOutputBusNumber == 1 && ioData != NULL) {
         InitPitch();
-        
-        // Obtener la frecuencia real de Discord para sincronizar
-        Float64 sr = 48000.0;
-        UInt32 size = sizeof(sr);
-        AudioUnitGetProperty(inUnit, kAudioUnitProperty_SampleRate, kAudioUnitScope_Output, 0, &sr, &size);
-        if (sr > 0) currentSampleRate = sr;
-        
         float gainLinear = powf(10.0f, (gGainDB / 20.0f));
         
         for (UInt32 i = 0; i < ioData->mNumberBuffers; i++) {
@@ -135,6 +133,8 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
 
             for (UInt32 j = 0; j < numSamples; j++) {
                 float micSample = (float)samples[j] / 32768.0f;
+                
+                // Si el mute automático está activo y hay música, silenciamos el mic
                 if (gMuteMicOnPlay && gIsMp3Playing) micSample = 0.0f;
 
                 float mp3Sample = 0.0f;
@@ -146,12 +146,14 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
 
                 float mixedSample = micSample + mp3Sample;
                 
+                // SOLO aplicar pitch si el usuario lo movió de 0
                 if (gPitchSemitones != 0.0f) {
                     mixedSample = ApplyPitch(mixedSample);
                 }
                 
                 mixedSample *= gainLinear;
                 
+                // Evitar distorsión (Clipping)
                 if (mixedSample > 1.0f || mixedSample < -1.0f) {
                     mixedSample = tanhf(mixedSample); 
                 }
