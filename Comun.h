@@ -1,19 +1,19 @@
+//
+//  Comun.h
+//
 #import <Foundation/Foundation.h>
-#import <UIKit/UIKit.h>
-#import <AVFoundation/AVFoundation.h>
 
 // Variables de Audio
 extern float gGainDB;
 extern float gPitchAmount;
 extern BOOL gMuteMicOnPlay;
 extern BOOL gSelfMonitor;
-
-// Reproductor MP3 (Compartido entre Interface y AudioEngine)
-extern AVAudioPlayer *gMP3Player;
+extern BOOL gIsMp3Playing;
 
 // Variables del Spoofer
 extern int gSpooferMode;
 
-// Funciones de Audio
-void gCargarYReproducirAudio(NSURL *url);
-void gDetenerAudio(void);
+// Funciones del Reproductor
+void CargarMP3(NSURL *url);
+void PlayMP3(void);
+void StopMP3(void);
