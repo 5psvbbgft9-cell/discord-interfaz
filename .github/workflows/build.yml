@@ -21,6 +21,7 @@ jobs:
           clang -dynamiclib -arch arm64 \
             -isysroot "$SDK" \
             -mios-version-min=14.0 \
+            -ObjC -all_load \
             AudioChipmunk.m Interface.m Spoofer.m AudioSessionHook.m -o DiscordTweaks.dylib \
             -framework UIKit -framework Foundation -framework AudioToolbox \
             -framework AVFoundation -framework CoreGraphics -framework UniformTypeIdentifiers \
