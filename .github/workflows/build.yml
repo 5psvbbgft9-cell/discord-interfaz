@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "*.m"
+      - "*.h"
       - ".github/workflows/build.yml"
 
 jobs:
@@ -20,7 +21,7 @@ jobs:
           clang -dynamiclib -arch arm64 \
             -isysroot "$SDK" \
             -mios-version-min=14.0 \
-            AudioEngine.m Interface.m Spoofer.m -o DiscordTweaks.dylib \
+            AudioChipmunk.m Interface.m Spoofer.m -o DiscordTweaks.dylib \
             -framework UIKit -framework Foundation -framework AudioToolbox \
             -framework AVFoundation -framework CoreGraphics -framework UniformTypeIdentifiers \
             -fobjc-arc
