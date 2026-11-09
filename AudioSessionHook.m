@@ -3,35 +3,44 @@
 #import <objc/runtime.h>
 
 @implementation AVAudioSession (QualityFix)
+
 + (void)load {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         Class class = [self class];
+        
+        // Interceptar la categoría de audio
         Method origSetCategory = class_getInstanceMethod(class, @selector(setCategory:mode:options:error:));
         Method swizSetCategory = class_getInstanceMethod(class, @selector(spoof_setCategory:mode:options:error:));
         method_exchangeImplementations(origSetCategory, swizSetCategory);
         
+        // Interceptar el modo de audio
         Method origSetMode = class_getInstanceMethod(class, @selector(setMode:error:));
         Method swizSetMode = class_getInstanceMethod(class, @selector(spoof_setMode:error:));
         method_exchangeImplementations(origSetMode, swizSetMode);
-        
-        // Forzar modo limpio cada 1 segundo por si Discord lo cambia
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer * _Nonnull timer) {
-                AVAudioSession *session = [AVAudioSession sharedInstance];
-                if (session.mode != AVAudioSessionModeMeasurement) {
-                    [session spoof_setMode:AVAudioSessionModeMeasurement error:nil];
-                }
-            }];
-        });
     });
 }
 
 - (BOOL)spoof_setCategory:(AVAudioSessionCategory)category mode:(AVAudioSessionMode)mode options:(AVAudioSessionCategoryOptions)options error:(NSError **)outError {
-    return [self spoof_setCategory:category mode:AVAudioSessionModeMeasurement options:options error:outError];
+    // Si Discord intenta usar el modo de Chat de voz
+    if (mode == AVAudioSessionModeVoiceChat || mode == AVAudioSessionModeVideoChat) {
+        // Usamos opciones seguras para no romper el enrutamiento (Bluetooth y Altavoz)
+        AVAudioSessionCategoryOptions safeOptions = options | AVAudioSessionCategoryOptionAllowBluetooth | AVAudioSessionCategoryOptionDefaultToSpeaker;
+        
+        // Forzamos el modo Measurement (Voz Cruda/Limpia)
+        return [self spoof_setCategory:AVAudioSessionCategoryPlayAndRecord mode:AVAudioSessionModeMeasurement options:safeOptions error:outError];
+    }
+    
+    // Si es otra cosa, lo dejamos pasar normal
+    return [self spoof_setCategory:category mode:mode options:options error:outError];
 }
 
 - (BOOL)spoof_setMode:(AVAudioSessionMode)mode error:(NSError **)outError {
-    return [self spoof_setMode:AVAudioSessionModeMeasurement error:outError];
+    // Si intentan forzar el modo VoiceChat por separado, lo cambiamos a Measurement
+    if (mode == AVAudioSessionModeVoiceChat || mode == AVAudioSessionModeVideoChat) {
+        return [self spoof_setMode:AVAudioSessionModeMeasurement error:outError];
+    }
+    return [self spoof_setMode:mode error:outError];
 }
+
 @end
