@@ -13,7 +13,6 @@ static SInt16 *mp3Samples = NULL;
 static long mp3TotalSamples = 0;
 static long mp3CurrentIndex = 0;
 
-// --- PITCH SHIFTER DE ALTA CALIDAD ---
 #define PITCH_BUFFER_SIZE 4096
 static float pitchBuffer[PITCH_BUFFER_SIZE];
 static int pitchWriteIdx = 0;
@@ -21,11 +20,11 @@ static float pitchReadIdxA = 0.0f;
 static float pitchReadIdxB = (float)(PITCH_BUFFER_SIZE / 2);
 static float windowTable[PITCH_BUFFER_SIZE];
 static BOOL isPitchInitialized = NO;
+static float lastFilteredSample = 0.0f; // Para el filtro
 
 static void InitPitch() {
     if (isPitchInitialized) return;
     for (int i = 0; i < PITCH_BUFFER_SIZE; i++) {
-        // Ventana de Hanning para suavizar los cortes de audio
         windowTable[i] = 0.5f - 0.5f * cosf(2.0f * M_PI * i / PITCH_BUFFER_SIZE);
     }
     isPitchInitialized = YES;
@@ -73,8 +72,6 @@ void StopMP3(void) { gIsMp3Playing = NO; }
 
 static float ApplyPitch(float sample) {
     pitchBuffer[pitchWriteIdx] = sample;
-    
-    // Convertir semitonos a factor de velocidad: 2^(semitones/12)
     float pitchFactor = powf(2.0f, gPitchSemitones / 12.0f);
     
     int idxA = (int)pitchReadIdxA;
@@ -89,14 +86,15 @@ static float ApplyPitch(float sample) {
     float outSample = valA * fade + valB * (1.0f - fade);
     
     pitchWriteIdx = (pitchWriteIdx + 1) % PITCH_BUFFER_SIZE;
-    
     pitchReadIdxA += pitchFactor;
     pitchReadIdxB += pitchFactor;
     
     if (pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA -= PITCH_BUFFER_SIZE;
     if (pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB -= PITCH_BUFFER_SIZE;
     
-    return outSample;
+    // Filtro Paso Bajo para quitar el ruido metálico del Pitch
+    lastFilteredSample = lastFilteredSample * 0.85f + outSample * 0.15f;
+    return lastFilteredSample;
 }
 
 static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *ioActionFlags,
@@ -126,14 +124,12 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
 
                 float mixedSample = micSample + mp3Sample;
                 
-                // Aplicar Pitch (solo si no es 0)
                 if (gPitchSemitones != 0.0f) {
                     mixedSample = ApplyPitch(mixedSample);
                 }
                 
                 mixedSample *= gainLinear;
                 
-                // Limitador suave
                 if (mixedSample > 1.0f || mixedSample < -1.0f) {
                     mixedSample = tanhf(mixedSample); 
                 }
