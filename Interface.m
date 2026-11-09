@@ -35,7 +35,8 @@
 
         CGFloat y = 10;
         y = [self addSlider:@"Gain (dB)" min:-20 max:100 def:0 tag:1 y:y];
-        y = [self addSlider:@"Pitch (Tono)" min:0.5 max:2.0 def:1.0 tag:2 y:y];
+        // SLIDER DE PITCH ACTUALIZADO A SEMITONOS (-12 a +12)
+        y = [self addSlider:@"Pitch (Semitonos)" min:-12.0 max:12.0 def:0.0 tag:2 y:y];
         
         UIButton *btnLoad = [UIButton buttonWithType:UIButtonTypeSystem];
         btnLoad.frame = CGRectMake(15, y, 100, 40); [btnLoad setTitle:@"Cargar MP3" forState:UIControlStateNormal];
@@ -98,7 +99,10 @@
     [card addSubview:sw]; [self.scrollView addSubview:card]; return y + 60;
 }
 
-- (void)sliderChanged:(UISlider *)s { if (s.tag == 1) gGainDB = s.value; if (s.tag == 2) gPitchAmount = s.value; }
+- (void)sliderChanged:(UISlider *)s { 
+    if (s.tag == 1) gGainDB = s.value; 
+    if (s.tag == 2) gPitchSemitones = s.value; 
+}
 - (void)switchChanged:(UISwitch *)s { if (s.tag == 3) gMuteMicOnPlay = s.isOn; }
 - (void)spooferChanged:(UISegmentedControl *)s { gSpooferMode = (int)s.selectedSegmentIndex; }
 - (void)abrirPicker { UIDocumentPickerViewController *p = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio]]; p.delegate = self; [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:p animated:YES completion:nil]; }
