@@ -1,11 +1,10 @@
-name: Build Interface.dylib
+name: Build DiscordTweaks.dylib
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "Interface.m"
-      - "AudioChipmunk.m"
+      - "*.m"
       - ".github/workflows/build.yml"
 
 jobs:
@@ -15,22 +14,22 @@ jobs:
       - name: Clonar repo
         uses: actions/checkout@v4
 
-      - name: Compilar dylib (arm64, iOS)
+      - name: Compilar dylib
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           clang -dynamiclib -arch arm64 \
             -isysroot "$SDK" \
             -mios-version-min=14.0 \
-            Interface.m AudioChipmunk.m -o Interface.dylib \
+            AudioEngine.m Interface.m Spoofer.m -o DiscordTweaks.dylib \
             -framework UIKit -framework Foundation -framework AudioToolbox \
             -framework AVFoundation -framework CoreGraphics -framework UniformTypeIdentifiers \
             -fobjc-arc
 
       - name: Firmar ad-hoc
-        run: codesign -s - Interface.dylib
+        run: codesign -s - DiscordTweaks.dylib
 
-      - name: Subir dylib
+      - name: Subir artefacto
         uses: actions/upload-artifact@v4
         with:
-          name: Interface-dylib
-          path: Interface.dylib
+          name: DiscordTweaks-dylib
+          path: DiscordTweaks.dylib
