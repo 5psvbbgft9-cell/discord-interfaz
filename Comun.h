@@ -2,12 +2,15 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 
-// Declaración de variables globales (la palabra "extern" significa "existen en otro archivo")
+// Variables de Audio
 extern float gGainDB;
 extern float gPitchAmount;
 extern BOOL gMuteMicOnPlay;
 extern BOOL gSelfMonitor;
 
-// Declaración de funciones de audio
+// Variables del Spoofer (0=iOS, 1=PC, 2=VR, 3=Android)
+extern int gSpooferMode;
+
+// Funciones de Audio
 void gCargarYReproducirAudio(NSURL *url);
 void gDetenerAudio(void);
