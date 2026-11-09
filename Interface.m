@@ -7,7 +7,6 @@
 @implementation PassThroughWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = [super hitTest:point withEvent:event];
-    // Si el toque es en el fondo de la ventana (no en la burbuja ni el panel), pasarlo a Discord
     if (hit == self || hit == self.rootViewController.view) return nil;
     return hit;
 }
@@ -18,7 +17,6 @@ static PassThroughWindow *gPanelWindow = nil;
 @interface PanelController : UIViewController <UIDocumentPickerDelegate>
 @property (nonatomic, strong) UIView *panelView;
 @property (nonatomic, strong) UIButton *bubbleBtn;
-@property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, assign) BOOL isPanelOpen;
 @end
 
@@ -51,7 +49,6 @@ static PassThroughWindow *gPanelWindow = nil;
     [self.bubbleBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.bubbleBtn];
     
-    // Hacer la burbuja arrastrable
     UIPanGestureRecognizer *panBubble = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
     [self.bubbleBtn addGestureRecognizer:panBubble];
 }
@@ -66,7 +63,6 @@ static PassThroughWindow *gPanelWindow = nil;
     self.panelView.hidden = YES;
     self.panelView.alpha = 0;
     
-    // Fondo desenfocado (Efecto cristal)
     UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
     blurView.frame = self.panelView.bounds;
@@ -74,14 +70,12 @@ static PassThroughWindow *gPanelWindow = nil;
     blurView.clipsToBounds = YES;
     [self.panelView addSubview:blurView];
     
-    // Título
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 20, 200, 30)];
     title.text = @"Ajustes de Discord";
     title.textColor = [UIColor whiteColor];
     title.font = [UIFont boldSystemFontOfSize:20];
     [self.panelView addSubview:title];
     
-    // Botón de Cerrar (Icono X nativo de iOS)
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     closeBtn.frame = CGRectMake(width - 45, 15, 30, 30);
     UIImage *xImg = [UIImage systemImageNamed:@"xmark.circle.fill"];
@@ -90,10 +84,8 @@ static PassThroughWindow *gPanelWindow = nil;
     [closeBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     [self.panelView addSubview:closeBtn];
     
-    // --- Controles ---
     CGFloat yPos = 70;
     
-    // Pitch
     UILabel *pitchLbl = [[UILabel alloc] initWithFrame:CGRectMake(20, yPos, 260, 20)];
     pitchLbl.text = [NSString stringWithFormat:@"Pitch (Tono): %.1f", gPitchAmount];
     pitchLbl.tag = 100;
@@ -108,7 +100,6 @@ static PassThroughWindow *gPanelWindow = nil;
     [self.panelView addSubview:pitchSlider];
     yPos += 70;
     
-    // Ganancia
     UILabel *gainLbl = [[UILabel alloc] initWithFrame:CGRectMake(20, yPos, 260, 20)];
     gainLbl.text = [NSString stringWithFormat:@"Volumen (Gain): %.1f", gGainDB];
     gainLbl.tag = 101;
@@ -123,7 +114,6 @@ static PassThroughWindow *gPanelWindow = nil;
     [self.panelView addSubview:gainSlider];
     yPos += 70;
     
-    // Spoofer
     UILabel *spoofLbl = [[UILabel alloc] initWithFrame:CGRectMake(20, yPos, 260, 20)];
     spoofLbl.text = @"Plataforma falsa (Spoofer)";
     spoofLbl.textColor = [UIColor whiteColor];
@@ -137,7 +127,6 @@ static PassThroughWindow *gPanelWindow = nil;
     [self.panelView addSubview:spooferControl];
     yPos += 80;
     
-    // MP3
     UIButton *mp3Btn = [UIButton buttonWithType:UIButtonTypeSystem];
     mp3Btn.frame = CGRectMake(20, yPos, 130, 40);
     [mp3Btn setTitle:@"Cargar MP3" forState:UIControlStateNormal];
@@ -152,7 +141,6 @@ static PassThroughWindow *gPanelWindow = nil;
     [mp3Switch addTarget:self action:@selector(toggleMP3:) forControlEvents:UIControlEventValueChanged];
     [self.panelView addSubview:mp3Switch];
     
-    // Hacer el panel arrastrable
     UIPanGestureRecognizer *panPanel = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
     [self.panelView addGestureRecognizer:panPanel];
     
@@ -160,7 +148,7 @@ static PassThroughWindow *gPanelWindow = nil;
 }
 
 // ==========================================
-// 3. LÓGICA Y ACCIONES
+// 3. ACCIONES Y LÓGICA
 // ==========================================
 - (void)togglePanel {
     self.isPanelOpen = !self.isPanelOpen;
@@ -209,7 +197,6 @@ static PassThroughWindow *gPanelWindow = nil;
 - (void)toggleMP3:(UISwitch *)sender {
     if (sender.isOn) {
         if (!gMP3Player) {
-            // Si no hay MP3 cargado, apagamos el switch y avisamos
             sender.on = NO;
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Atención" message:@"Primero carga un archivo MP3." preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -223,7 +210,12 @@ static PassThroughWindow *gPanelWindow = nil;
 }
 
 - (void)loadAudio {
+    // Se usa la API antigua pero se silencia el warning para evitar errores de linkeo
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio"] inMode:UIDocumentPickerModeImport];
+    #pragma clang diagnostic pop
+    
     picker.delegate = self;
     [self presentViewController:picker animated:YES completion:nil];
 }
@@ -237,7 +229,7 @@ static PassThroughWindow *gPanelWindow = nil;
 @end
 
 // ==========================================
-// 4. INYECCIÓN (Compatible iOS 27)
+// 4. INYECCIÓN EN LA APP
 // ==========================================
 __attribute__((constructor))
 static void initInterface(void) {
