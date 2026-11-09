@@ -2,15 +2,21 @@
 #import <os/log.h>
 #import <objc/runtime.h>
 
-// DEFINICIÓN REAL DE VARIABLES DE AUDIO
+// ============================================================
+// 1. DEFINICIÓN REAL DE VARIABLES
+// ============================================================
 float gGainDB = 1.0f;
 float gPitchAmount = 0.0f;
 BOOL gMuteMicOnPlay = NO;
 BOOL gSelfMonitor = NO;
 
-static AVAudioPlayer *gMP3Player = nil;
+// Variable global del reproductor (ya no tiene "static")
+AVAudioPlayer *gMP3Player = nil;
 static NSURL *gCurrentAudioURL = nil;
 
+// ============================================================
+// 2. LÓGICA DEL REPRODUCTOR MP3
+// ============================================================
 void gCargarYReproducirAudio(NSURL *url) {
     if (!url) return;
     gCurrentAudioURL = url;
@@ -32,7 +38,9 @@ void gDetenerAudio(void) {
     }
 }
 
-// HOOK DE AUDIO
+// ============================================================
+// 3. HOOK DE AUDIO (Procesar la voz en la llamada)
+// ============================================================
 static void (*orig_installTap)(id, SEL, AVAudioNodeBus, AVAudioFrameCount, AVAudioFormat *, AVAudioNodeTapBlock);
 
 static void hook_installTap(id self, SEL _cmd, AVAudioNodeBus bus, AVAudioFrameCount bufferSize, AVAudioFormat *format, AVAudioNodeTapBlock tapBlock) {
@@ -43,9 +51,14 @@ static void hook_installTap(id self, SEL _cmd, AVAudioNodeBus bus, AVAudioFrameC
             float pitchRatio = powf(2.0f, gPitchAmount / 12.0f);
 
             for (AVAudioFrameCount i = 0; i < frames; i++) {
+                // 1. Aplicar Ganancia (DB)
                 data[i] *= gGainDB;
+                
+                // 2. Aplicar Pitch (Tono)
                 size_t srcIndex = (size_t)(i * pitchRatio);
-                if (srcIndex < frames) data[i] = data[srcIndex];
+                if (srcIndex < frames) {
+                    data[i] = data[srcIndex];
+                }
             }
         }
         if (tapBlock) tapBlock(buf, when);
