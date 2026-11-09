@@ -9,11 +9,12 @@ BOOL gMuteMicOnPlay = NO;
 BOOL gIsMp3Playing = NO;
 int gSpooferMode = 0;
 
-// Buffers separados para Izquierda y Derecha (Estéreo Real)
-static SInt16 *mp3Left = NULL;
-static SInt16 *mp3Right = NULL;
+// Buffers del MP3 en Flotante (Calidad Original)
+static float *mp3Left = NULL;
+static float *mp3Right = NULL;
 static long mp3TotalFrames = 0;
-static long mp3CurrentFrame = 0;
+static double mp3Playhead = 0.0; 
+static double mp3FileSampleRate = 48000.0;
 
 #define PITCH_BUFFER_SIZE 2048
 static float pitchBuffer[PITCH_BUFFER_SIZE];
@@ -42,41 +43,21 @@ void CargarMP3(NSURL *url) {
     if (mp3Left) { free(mp3Left); mp3Left = NULL; }
     if (mp3Right) { free(mp3Right); mp3Right = NULL; }
     
-    // Forzar a 48kHz manualmente
-    double targetRate = 48000.0; 
-    double sourceRate = fileFormat.sampleRate;
-    double ratio = sourceRate / targetRate;
+    mp3TotalFrames = buffer.frameLength;
+    mp3FileSampleRate = fileFormat.sampleRate;
     
-    long sourceLength = buffer.frameLength;
-    long targetLength = (long)(sourceLength / ratio) + 1;
-    
-    mp3Left = (SInt16 *)malloc(targetLength * sizeof(SInt16));
-    mp3Right = (SInt16 *)malloc(targetLength * sizeof(SInt16));
-    mp3TotalFrames = targetLength;
+    mp3Left = (float *)malloc(mp3TotalFrames * sizeof(float));
+    mp3Right = (float *)malloc(mp3TotalFrames * sizeof(float));
     
     float *floatL = buffer.floatChannelData[0]; 
     float *floatR = (fileFormat.channelCount > 1) ? buffer.floatChannelData[1] : floatL;
     
-    // Remuestreo Estéreo de Alta Calidad
-    for (long i = 0; i < targetLength; i++) {
-        double srcIndex = i * ratio;
-        long idx1 = (long)srcIndex;
-        long idx2 = (idx1 + 1 < sourceLength) ? idx1 + 1 : idx1;
-        double frac = srcIndex - idx1;
-        
-        float s1L = floatL[idx1];
-        float s2L = floatL[idx2];
-        float sampleL = s1L * (1.0 - frac) + s2L * frac;
-        
-        float s1R = floatR[idx1];
-        float s2R = floatR[idx2];
-        float sampleR = s1R * (1.0 - frac) + s2R * frac;
-        
-        mp3Left[i] = (SInt16)(sampleL * 32767.0f);
-        mp3Right[i] = (SInt16)(sampleR * 32767.0f);
+    for (long i = 0; i < mp3TotalFrames; i++) {
+        mp3Left[i] = floatL[i];
+        mp3Right[i] = floatR[i];
     }
     
-    mp3CurrentFrame = 0;
+    mp3Playhead = 0.0;
     gIsMp3Playing = NO;
     memset(pitchBuffer, 0, sizeof(pitchBuffer));
     pitchWriteIdx = 0;
@@ -84,7 +65,7 @@ void CargarMP3(NSURL *url) {
     pitchReadIdxB = PITCH_BUFFER_SIZE / 2;
 }
 
-void PlayMP3(void) { mp3CurrentFrame = 0; gIsMp3Playing = YES; }
+void PlayMP3(void) { mp3Playhead = 0.0; gIsMp3Playing = YES; }
 void StopMP3(void) { gIsMp3Playing = NO; }
 
 static float ApplyPitch(float sample) {
@@ -120,9 +101,15 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
     OSStatus status = orig_AudioUnitRender(inUnit, ioActionFlags, inTimeStamp, inOutputBusNumber, inNumberFrames, ioData);
     
     if (status == noErr && inOutputBusNumber == 1 && ioData != NULL) {
-        float gainLinear = powf(10.0f, (gGainDB / 20.0f));
+        // 1. LEER LA FRECUENCIA REAL DE DISCORD (Evita el ralentizado)
+        Float64 hardwareSampleRate = 48000.0;
+        UInt32 size = sizeof(hardwareSampleRate);
+        AudioUnitGetProperty(inUnit, kAudioUnitProperty_SampleRate, kAudioUnitScope_Output, 0, &hardwareSampleRate, &size);
         
-        // Detectar si Discord pide el audio entrelazado (1 buffer) o separado (2 buffers)
+        // 2. CALCULAR LA VELOCIDAD (Si Discord está a 24kHz, el paso será 2.0)
+        double step = mp3FileSampleRate / hardwareSampleRate;
+        
+        float gainLinear = powf(10.0f, (gGainDB / 20.0f));
         BOOL isInterleaved = (ioData->mNumberBuffers == 1);
         
         for (UInt32 i = 0; i < ioData->mNumberBuffers; i++) {
@@ -131,8 +118,6 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
             if (!samples) continue;
 
             for (UInt32 j = 0; j < numSamples; j++) {
-                // Lógica para saber qué canal estamos procesando
-                int frameIndex = isInterleaved ? (j / 2) : j;
                 int channel = isInterleaved ? (j % 2) : i;
                 
                 float micSample = (float)samples[j] / 32768.0f;
@@ -140,37 +125,32 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
 
                 float mp3Sample = 0.0f;
                 if (gIsMp3Playing && mp3Left && mp3Right && mp3TotalFrames > 0) {
-                    long readIdx = mp3CurrentFrame + frameIndex;
-                    if (readIdx >= mp3TotalFrames) readIdx = readIdx % mp3TotalFrames;
+                    long idx1 = (long)mp3Playhead;
+                    long idx2 = (idx1 + 1 < mp3TotalFrames) ? idx1 + 1 : idx1;
+                    float frac = mp3Playhead - idx1;
                     
-                    SInt16 *mp3ChanData = (channel == 0) ? mp3Left : mp3Right;
-                    mp3Sample = (float)mp3ChanData[readIdx] / 32768.0f;
+                    float *mp3ChanData = (channel == 0) ? mp3Left : mp3Right;
+                    mp3Sample = mp3ChanData[idx1] * (1.0f - frac) + mp3ChanData[idx2] * frac;
+                    
+                    // Avanzar el playhead usando la velocidad calculada
+                    if (channel == 0 || !isInterleaved) {
+                        mp3Playhead += step;
+                        if (mp3Playhead >= mp3TotalFrames) mp3Playhead = 0.0;
+                    }
                 }
 
-                // MEZCLA CON HEADROOM (Evita saturación)
-                // Bajamos un poco el volumen de ambos para que no saturen juntos
                 float mixedSample = (micSample * 0.8f) + (mp3Sample * 0.8f);
                 
-                // BYPASS DE PITCH: Solo se procesa si el slider NO está en 0
                 if (gPitchSemitones != 0.0f) {
                     mixedSample = ApplyPitch(mixedSample);
                 }
                 
                 mixedSample *= gainLinear;
-                
-                // Soft Clipping (Limitador suave)
                 if (mixedSample > 1.0f) mixedSample = tanhf(mixedSample);
                 if (mixedSample < -1.0f) mixedSample = tanhf(mixedSample);
 
                 samples[j] = (SInt16)(mixedSample * 32767.0f);
             }
-        }
-        
-        // Avanzar el frame del MP3 DESPUÉS de procesar los buffers
-        UInt32 framesProcessed = isInterleaved ? (ioData->mBuffers[0].mDataByteSize / sizeof(SInt16) / 2) : (ioData->mBuffers[0].mDataByteSize / sizeof(SInt16));
-        if (gIsMp3Playing) {
-            mp3CurrentFrame += framesProcessed;
-            if (mp3CurrentFrame >= mp3TotalFrames) mp3CurrentFrame = 0;
         }
     }
     return status;
