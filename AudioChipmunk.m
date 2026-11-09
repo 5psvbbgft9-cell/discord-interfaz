@@ -1,23 +1,22 @@
-//
-// AudioChipmunk.m
-//
-
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import "Comun.h"
 
-// Variables globales controladas por la Interfaz
+// Inicializar variables (solo se declaran aquí una vez)
 float gGainDB = 0.0f;
 float gPitchAmount = 1.0f;
-BOOL gMuteMic = NO;
+BOOL gMuteMicOnPlay = NO;
+BOOL gSelfMonitor = NO;
+BOOL gIsMp3Playing = NO;
+int gSpooferMode = 0;
 
-// Variables para el reproductor MP3
+// Variables MP3
 static SInt16 *mp3Samples = NULL;
 static long mp3TotalSamples = 0;
 static long mp3CurrentIndex = 0;
-BOOL gIsMp3Playing = NO;
 
-// Variables para el Pitch Shifter
+// Variables Pitch
 #define RING_SIZE 8192
 static float ringBuffer[RING_SIZE];
 static int writeIndex = 0;
@@ -34,7 +33,6 @@ static OSStatus (*orig_AudioUnitRender)(AudioUnit, AudioUnitRenderActionFlags *,
                                          const AudioTimeStamp *, UInt32, UInt32,
                                          AudioBufferList *) = AudioUnitRender;
 
-// Función para cargar el MP3 a memoria (Se llama desde la UI)
 void CargarMP3(NSURL *url) {
     NSError *error;
     AVAudioFile *file = [[AVAudioFile alloc] initForReading:url error:&error];
@@ -47,13 +45,16 @@ void CargarMP3(NSURL *url) {
 
     if (mp3Samples) { free(mp3Samples); mp3Samples = NULL; }
     
-    // Convertir a SInt16
-    mp3TotalSamples = length * format.channelCount;
+    // Forzar estéreo (2 canales) para mezclar bien con Discord
+    mp3TotalSamples = length * 2;
     mp3Samples = (SInt16 *)malloc(mp3TotalSamples * sizeof(SInt16));
     
-    float *floatData = buffer.floatChannelData[0];
-    for (long i = 0; i < mp3TotalSamples; i++) {
-        mp3Samples[i] = (SInt16)(floatData[i] * 32767.0f);
+    float *leftCh = buffer.floatChannelData[0];
+    float *rightCh = format.channelCount > 1 ? buffer.floatChannelData[1] : leftCh;
+
+    for (long i = 0; i < length; i++) {
+        mp3Samples[i * 2]     = (SInt16)(leftCh[i] * 32767.0f);
+        mp3Samples[i * 2 + 1] = (SInt16)(rightCh[i] * 32767.0f);
     }
     
     mp3CurrentIndex = 0;
@@ -63,7 +64,6 @@ void CargarMP3(NSURL *url) {
 void PlayMP3(void) { mp3CurrentIndex = 0; gIsMp3Playing = YES; }
 void StopMP3(void) { gIsMp3Playing = NO; }
 
-// EL HOOK REAL
 static OSStatus MyAudioUnitRender(AudioUnit inUnit,
                                    AudioUnitRenderActionFlags *ioActionFlags,
                                    const AudioTimeStamp *inTimeStamp,
@@ -74,8 +74,8 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit,
     OSStatus status = orig_AudioUnitRender(inUnit, ioActionFlags, inTimeStamp, inOutputBusNumber, inNumberFrames, ioData);
     
     if (status == noErr && inOutputBusNumber == 1 && ioData != NULL) {
-        float gainLinear = powf(10.0f, (gGainDB / 20.0f)); // Convertir dB a lineal
-        if (gainLinear > 100.0f) gainLinear = 100.0f; // Límite de seguridad
+        float gainLinear = powf(10.0f, (gGainDB / 20.0f));
+        if (gainLinear > 100.0f) gainLinear = 100.0f;
         
         for (UInt32 i = 0; i < ioData->mNumberBuffers; i++) {
             SInt16 *samples = (SInt16 *)ioData->mBuffers[i].mData;
@@ -85,20 +85,18 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit,
             for (UInt32 j = 0; j < numSamples; j++) {
                 float micSample = (float)samples[j] / 32768.0f;
                 
-                // 1. Silenciar micrófono si se pide
-                if (gMuteMic && gIsMp3Playing) micSample = 0.0f;
+                if (gMuteMicOnPlay && gIsMp3Playing) micSample = 0.0f;
 
-                // 2. Mezclar MP3
                 float mp3Sample = 0.0f;
                 if (gIsMp3Playing && mp3Samples && mp3TotalSamples > 0) {
                     mp3Sample = (float)mp3Samples[mp3CurrentIndex] / 32768.0f;
                     mp3CurrentIndex++;
-                    if (mp3CurrentIndex >= mp3TotalSamples) mp3CurrentIndex = 0; // Loop
+                    if (mp3CurrentIndex >= mp3TotalSamples) mp3CurrentIndex = 0;
                 }
 
                 float mixedSample = micSample + mp3Sample;
 
-                // 3. Aplicar Pitch (Algoritmo de buffer circular simple)
+                // Pitch Shift
                 ringBuffer[writeIndex] = mixedSample;
                 writeIndex = (writeIndex + 1) % RING_SIZE;
                 
@@ -114,10 +112,8 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit,
                 if (dist < 0) dist += RING_SIZE;
                 if (dist < 256) { readIndex -= 256; if (readIndex < 0) readIndex += RING_SIZE; }
 
-                // 4. Aplicar Ganancia
                 pitchSample *= gainLinear;
 
-                // 5. Clipping para evitar distorsión
                 if (pitchSample > 1.0f) pitchSample = 1.0f;
                 if (pitchSample < -1.0f) pitchSample = -1.0f;
 
