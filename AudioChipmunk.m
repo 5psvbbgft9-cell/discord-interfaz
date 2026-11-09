@@ -1,40 +1,147 @@
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
-#import <objc/runtime.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import "Comun.h"
 
-@implementation AVAudioSession (QualityFix)
+float gGainDB = 0.0f;
+float gPitchSemitones = 0.0f;
+BOOL gMuteMicOnPlay = NO;
+BOOL gIsMp3Playing = NO;
+int gSpooferMode = 0;
 
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Class class = [self class];
-        
-        // Hookear la configuración de la categoría
-        Method origSetCategory = class_getInstanceMethod(class, @selector(setCategory:mode:options:error:));
-        Method swizSetCategory = class_getInstanceMethod(class, @selector(spoof_setCategory:mode:options:error:));
-        method_exchangeImplementations(origSetCategory, swizSetCategory);
-        
-        // Hookear el modo directamente
-        Method origSetMode = class_getInstanceMethod(class, @selector(setMode:error:));
-        Method swizSetMode = class_getInstanceMethod(class, @selector(spoof_setMode:error:));
-        method_exchangeImplementations(origSetMode, swizSetMode);
-    });
-}
+static SInt16 *mp3Samples = NULL;
+static long mp3TotalSamples = 0;
+static long mp3CurrentIndex = 0;
 
-- (BOOL)spoof_setCategory:(AVAudioSessionCategory)category mode:(AVAudioSessionMode)mode options:(AVAudioSessionCategoryOptions)options error:(NSError **)outError {
-    // Forzamos el modo Measurement (Audio Crudo de estudio) y quitamos el MixWithOthers
-    AVAudioSessionMode cleanMode = AVAudioSessionModeMeasurement;
-    AVAudioSessionCategoryOptions cleanOptions = options & ~AVAudioSessionCategoryOptionMixWithOthers;
-    
-    return [self spoof_setCategory:category mode:cleanMode options:cleanOptions error:outError];
-}
+// --- PITCH SHIFTER DE ALTA CALIDAD ---
+#define PITCH_BUFFER_SIZE 4096
+static float pitchBuffer[PITCH_BUFFER_SIZE];
+static int pitchWriteIdx = 0;
+static float pitchReadIdxA = 0.0f;
+static float pitchReadIdxB = (float)(PITCH_BUFFER_SIZE / 2);
+static float windowTable[PITCH_BUFFER_SIZE];
+static BOOL isPitchInitialized = NO;
 
-- (BOOL)spoof_setMode:(AVAudioSessionMode)mode error:(NSError **)outError {
-    // Si Discord intenta poner VoiceChat, lo cambiamos a Measurement
-    if (mode == AVAudioSessionModeVoiceChat || mode == AVAudioSessionModeVideoChat) {
-        return [self spoof_setMode:AVAudioSessionModeMeasurement error:outError];
+static void InitPitch() {
+    if (isPitchInitialized) return;
+    for (int i = 0; i < PITCH_BUFFER_SIZE; i++) {
+        // Ventana de Hanning para suavizar los cortes de audio
+        windowTable[i] = 0.5f - 0.5f * cosf(2.0f * M_PI * i / PITCH_BUFFER_SIZE);
     }
-    return [self spoof_setMode:mode error:outError];
+    isPitchInitialized = YES;
 }
 
-@end
+#define DYLD_INTERPOSE(_replacement, _replacee) \
+__attribute__((used)) static struct { \
+    const void *replacement; \
+    const void *replacee; \
+} _interpose_##_replacee __attribute__((section("__DATA,__interpose"))) = \
+    { (const void *)(unsigned long)&_replacement, (const void *)(unsigned long)&_replacee };
+
+static OSStatus (*orig_AudioUnitRender)(AudioUnit, AudioUnitRenderActionFlags *,
+                                         const AudioTimeStamp *, UInt32, UInt32,
+                                         AudioBufferList *) = AudioUnitRender;
+
+void CargarMP3(NSURL *url) {
+    NSError *error;
+    AVAudioFile *file = [[AVAudioFile alloc] initForReading:url error:&error];
+    if (error) return;
+
+    AVAudioFormat *format = file.processingFormat;
+    AVAudioFrameCount length = (AVAudioFrameCount)file.length;
+    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:format frameCapacity:length];
+    [file readIntoBuffer:buffer error:&error];
+
+    if (mp3Samples) { free(mp3Samples); mp3Samples = NULL; }
+    
+    mp3TotalSamples = length * format.channelCount;
+    mp3Samples = (SInt16 *)malloc(mp3TotalSamples * sizeof(SInt16));
+    
+    for (int ch = 0; ch < format.channelCount; ch++) {
+        float *channelData = buffer.floatChannelData[ch];
+        for (long i = 0; i < length; i++) {
+            mp3Samples[i * format.channelCount + ch] = (SInt16)(channelData[i] * 32767.0f);
+        }
+    }
+    mp3CurrentIndex = 0;
+    gIsMp3Playing = NO;
+    InitPitch();
+}
+
+void PlayMP3(void) { mp3CurrentIndex = 0; gIsMp3Playing = YES; }
+void StopMP3(void) { gIsMp3Playing = NO; }
+
+static float ApplyPitch(float sample) {
+    pitchBuffer[pitchWriteIdx] = sample;
+    
+    // Convertir semitonos a factor de velocidad: 2^(semitones/12)
+    float pitchFactor = powf(2.0f, gPitchSemitones / 12.0f);
+    
+    int idxA = (int)pitchReadIdxA;
+    int idxB = (int)pitchReadIdxB;
+    float fracA = pitchReadIdxA - idxA;
+    float fracB = pitchReadIdxB - idxB;
+    
+    float valA = pitchBuffer[idxA] * (1.0f - fracA) + pitchBuffer[(idxA + 1) % PITCH_BUFFER_SIZE] * fracA;
+    float valB = pitchBuffer[idxB] * (1.0f - fracB) + pitchBuffer[(idxB + 1) % PITCH_BUFFER_SIZE] * fracB;
+    
+    float fade = windowTable[idxA];
+    float outSample = valA * fade + valB * (1.0f - fade);
+    
+    pitchWriteIdx = (pitchWriteIdx + 1) % PITCH_BUFFER_SIZE;
+    
+    pitchReadIdxA += pitchFactor;
+    pitchReadIdxB += pitchFactor;
+    
+    if (pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA -= PITCH_BUFFER_SIZE;
+    if (pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB -= PITCH_BUFFER_SIZE;
+    
+    return outSample;
+}
+
+static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *ioActionFlags,
+                                   const AudioTimeStamp *inTimeStamp, UInt32 inOutputBusNumber,
+                                   UInt32 inNumberFrames, AudioBufferList *ioData) {
+    OSStatus status = orig_AudioUnitRender(inUnit, ioActionFlags, inTimeStamp, inOutputBusNumber, inNumberFrames, ioData);
+    
+    if (status == noErr && inOutputBusNumber == 1 && ioData != NULL) {
+        InitPitch();
+        float gainLinear = powf(10.0f, (gGainDB / 20.0f));
+        
+        for (UInt32 i = 0; i < ioData->mNumberBuffers; i++) {
+            SInt16 *samples = (SInt16 *)ioData->mBuffers[i].mData;
+            UInt32 numSamples = ioData->mBuffers[i].mDataByteSize / sizeof(SInt16);
+            if (!samples) continue;
+
+            for (UInt32 j = 0; j < numSamples; j++) {
+                float micSample = (float)samples[j] / 32768.0f;
+                if (gMuteMicOnPlay && gIsMp3Playing) micSample = 0.0f;
+
+                float mp3Sample = 0.0f;
+                if (gIsMp3Playing && mp3Samples && mp3TotalSamples > 0) {
+                    mp3Sample = (float)mp3Samples[mp3CurrentIndex] / 32768.0f;
+                    mp3CurrentIndex++;
+                    if (mp3CurrentIndex >= mp3TotalSamples) mp3CurrentIndex = 0;
+                }
+
+                float mixedSample = micSample + mp3Sample;
+                
+                // Aplicar Pitch (solo si no es 0)
+                if (gPitchSemitones != 0.0f) {
+                    mixedSample = ApplyPitch(mixedSample);
+                }
+                
+                mixedSample *= gainLinear;
+                
+                // Limitador suave
+                if (mixedSample > 1.0f || mixedSample < -1.0f) {
+                    mixedSample = tanhf(mixedSample); 
+                }
+
+                samples[j] = (SInt16)(mixedSample * 32767.0f);
+            }
+        }
+    }
+    return status;
+}
+DYLD_INTERPOSE(MyAudioUnitRender, AudioUnitRender)
