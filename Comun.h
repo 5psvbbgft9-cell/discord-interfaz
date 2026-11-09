@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 
 extern float gGainDB;
-extern float gPitchSemitones; // Ahora usamos semitonos (-12 a +12)
+extern float gPitchSemitones;
 extern BOOL gMuteMicOnPlay;
 extern BOOL gIsMp3Playing;
 extern int gSpooferMode;
