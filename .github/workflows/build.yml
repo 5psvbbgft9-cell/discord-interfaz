@@ -15,9 +15,6 @@ jobs:
       - name: Clonar repo
         uses: actions/checkout@v4
 
-      - name: Mostrar SDKs disponibles
-        run: xcodebuild -showsdks
-
       - name: Compilar dylib (arm64, iOS)
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -25,13 +22,14 @@ jobs:
             -isysroot "$SDK" \
             -mios-version-min=14.0 \
             Interface.m AudioChipmunk.m -o Interface.dylib \
-            -framework UIKit -framework Foundation -framework AudioToolbox -framework CoreGraphics \
+            -framework UIKit -framework Foundation -framework AudioToolbox \
+            -framework AVFoundation -framework CoreGraphics -framework UniformTypeIdentifiers \
             -fobjc-arc
 
-      - name: Firmar ad-hoc (ESign/resigner lo volverá a firmar igual)
+      - name: Firmar ad-hoc
         run: codesign -s - Interface.dylib
 
-      - name: Subir dylib como artefacto
+      - name: Subir dylib
         uses: actions/upload-artifact@v4
         with:
           name: Interface-dylib
