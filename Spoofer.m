@@ -1,17 +1,34 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
+#import <sys/sysctl.h>
 #import <sys/utsname.h>
 #import "Comun.h"
 
-// 1. Interceptar uname() (Usado por React Native para leer el hardware)
-static int (*orig_uname)(struct utsname *) = uname;
-int hook_uname(struct utsname *buf) {
-    int res = orig_uname(buf);
-    if (res == 0 && buf) {
-        if (gSpooferMode == 1) strcpy(buf->machine, "x86_64");      // PC
-        else if (gSpooferMode == 2) strcpy(buf->machine, "Oculus Quest 2"); // VR
-        else if (gSpooferMode == 3) strcpy(buf->machine, "SM-G998B");       // Android
+// 1. Interceptar sysctl (Mucho más seguro)
+static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t) = NULL;
+
+static int my_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (!orig_sysctlbyname) {
+        orig_sysctlbyname = dlsym(RTLD_DEFAULT, "sysctlbyname");
+    }
+    
+    int res = orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
+    
+    if (res == 0 && oldp && strcmp(name, "hw.machine") == 0) {
+        const char *fakeMachine = NULL;
+        if (gSpooferMode == 1) fakeMachine = "MacBookPro18,1"; // PC (MacOS)
+        else if (gSpooferMode == 2) fakeMachine = "Oculus Quest"; // VR
+        else if (gSpooferMode == 3) fakeMachine = "SM-G998B"; // Android
+        
+        if (fakeMachine) {
+            size_t len = strlen(fakeMachine) + 1;
+            // Solo copiamos si hay suficiente espacio para evitar crash
+            if (oldlenp && *oldlenp >= len) {
+                memcpy(oldp, fakeMachine, len);
+                *oldlenp = len;
+            }
+        }
     }
     return res;
 }
@@ -23,7 +40,7 @@ __attribute__((used)) static struct { \
 } _interpose_##_replacee __attribute__((section("__DATA,__interpose"))) = \
     { (const void *)(unsigned long)&_replacement, (const void *)(unsigned long)&_replacee };
 
-DYLD_INTERPOSE(hook_uname, uname)
+DYLD_INTERPOSE(my_sysctlbyname, sysctlbyname)
 
 // 2. Interceptar UIDevice
 @implementation UIDevice (Spoofer)
@@ -42,7 +59,7 @@ DYLD_INTERPOSE(hook_uname, uname)
     return [self spoof_model];
 }
 - (NSString *)spoof_systemName {
-    if (gSpooferMode == 1) return @"Windows";
+    if (gSpooferMode == 1) return @"MacOS";
     if (gSpooferMode == 2) return @"Oculus";
     if (gSpooferMode == 3) return @"Android";
     return [self spoof_systemName];
