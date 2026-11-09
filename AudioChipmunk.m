@@ -12,6 +12,7 @@ int gSpooferMode = 0;
 static SInt16 *mp3Samples = NULL;
 static long mp3TotalSamples = 0;
 static long mp3CurrentIndex = 0;
+static Float64 currentSampleRate = 48000.0; // Frecuencia por defecto
 
 #define PITCH_BUFFER_SIZE 8192
 static float pitchBuffer[PITCH_BUFFER_SIZE];
@@ -44,21 +45,40 @@ void CargarMP3(NSURL *url) {
     AVAudioFile *file = [[AVAudioFile alloc] initForReading:url error:&error];
     if (error) return;
 
-    AVAudioFormat *format = file.processingFormat;
-    AVAudioFrameCount length = (AVAudioFrameCount)file.length;
-    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:format frameCapacity:length];
-    [file readIntoBuffer:buffer error:&error];
+    AVAudioFormat *fileFormat = file.processingFormat;
+    // Forzamos el MP3 a 48kHz Estéreo para que coincida con Discord
+    AVAudioFormat *targetFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32 sampleRate:currentSampleRate channels:2 interleaved:NO];
+    
+    AVAudioConverter *converter = [[AVAudioConverter alloc] initFromFormat:fileFormat toFormat:targetFormat];
+    
+    AVAudioPCMBuffer *inputBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fileFormat frameCapacity:(AVAudioFrameCount)file.length];
+    [file readIntoBuffer:inputBuffer error:&error];
+    
+    AVAudioFrameCount outputCapacity = inputBuffer.frameLength * (currentSampleRate / fileFormat.sampleRate);
+    AVAudioPCMBuffer *outputBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:targetFormat frameCapacity:outputCapacity];
+    
+    __block BOOL done = NO;
+    [converter convertToBuffer:outputBuffer error:&error withInputFromBlock:^AVAudioBuffer * _Nullable(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus * _Nonnull outStatus) {
+        if (done) {
+            *outStatus = AVAudioConverterInputStatus_EndOfStream;
+            return nil;
+        }
+        done = YES;
+        *outStatus = AVAudioConverterInputStatus_HaveData;
+        return inputBuffer;
+    }];
 
     if (mp3Samples) { free(mp3Samples); mp3Samples = NULL; }
     
-    mp3TotalSamples = length * format.channelCount;
+    mp3TotalSamples = outputBuffer.frameLength * 2; 
     mp3Samples = (SInt16 *)malloc(mp3TotalSamples * sizeof(SInt16));
     
-    for (int ch = 0; ch < format.channelCount; ch++) {
-        float *channelData = buffer.floatChannelData[ch];
-        for (long i = 0; i < length; i++) {
-            mp3Samples[i * format.channelCount + ch] = (SInt16)(channelData[i] * 32767.0f);
-        }
+    float *leftCh = outputBuffer.floatChannelData[0];
+    float *rightCh = outputBuffer.floatChannelData[1];
+    
+    for (long i = 0; i < outputBuffer.frameLength; i++) {
+        mp3Samples[i * 2]     = (SInt16)(leftCh[i] * 32767.0f);
+        mp3Samples[i * 2 + 1] = (SInt16)(rightCh[i] * 32767.0f);
     }
     mp3CurrentIndex = 0;
     gIsMp3Playing = NO;
@@ -90,7 +110,6 @@ static float ApplyPitch(float sample) {
     if (pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA -= PITCH_BUFFER_SIZE;
     if (pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB -= PITCH_BUFFER_SIZE;
     
-    // Suavizado para quitar el ruido metálico
     smoothSample = smoothSample * 0.5f + outSample * 0.5f;
     return smoothSample;
 }
@@ -100,6 +119,13 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
     
     if (status == noErr && inOutputBusNumber == 1 && ioData != NULL) {
         InitPitch();
+        
+        // Obtener la frecuencia real de Discord para sincronizar
+        Float64 sr = 48000.0;
+        UInt32 size = sizeof(sr);
+        AudioUnitGetProperty(inUnit, kAudioUnitProperty_SampleRate, kAudioUnitScope_Output, 0, &sr, &size);
+        if (sr > 0) currentSampleRate = sr;
+        
         float gainLinear = powf(10.0f, (gGainDB / 20.0f));
         
         for (UInt32 i = 0; i < ioData->mNumberBuffers; i++) {
