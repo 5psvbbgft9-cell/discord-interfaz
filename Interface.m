@@ -35,7 +35,6 @@
 
         CGFloat y = 10;
         y = [self addSlider:@"Gain (dB)" min:-20 max:100 def:0 tag:1 y:y];
-        // SLIDER DE PITCH ACTUALIZADO A SEMITONOS (-12 a +12)
         y = [self addSlider:@"Pitch (Semitonos)" min:-12.0 max:12.0 def:0.0 tag:2 y:y];
         
         UIButton *btnLoad = [UIButton buttonWithType:UIButtonTypeSystem];
