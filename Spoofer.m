@@ -1,12 +1,9 @@
-//
-// Spoofer.m
-//
-
-#import <Foundation/Foundation.h>
+#import "Comun.h"
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
 
-int gSpooferMode = 0; // 0 = iPhone, 1 = PC, 2 = VR, 3 = Android
+// DEFINICIÓN REAL DE LA VARIABLE DEL SPOOFER
+int gSpooferMode = 0; 
 
 @implementation UIDevice (Spoofer)
 + (void)load {
@@ -14,14 +11,12 @@ int gSpooferMode = 0; // 0 = iPhone, 1 = PC, 2 = VR, 3 = Android
     dispatch_once(&onceToken, ^{
         Class class = [self class];
         
-        // Hookear "model"
         SEL originalSelector = @selector(model);
         SEL swizzledSelector = @selector(spoof_model);
         Method originalMethod = class_getInstanceMethod(class, originalSelector);
         Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
         method_exchangeImplementations(originalMethod, swizzledMethod);
         
-        // Hookear "systemName"
         SEL originalSys = @selector(systemName);
         SEL swizzledSys = @selector(spoof_systemName);
         Method originalSysM = class_getInstanceMethod(class, originalSys);
