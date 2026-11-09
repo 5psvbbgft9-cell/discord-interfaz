@@ -3,6 +3,7 @@
 #import "Comun.h"
 
 @interface PanelRosa : UIView <UIDocumentPickerDelegate>
+@property (nonatomic, strong) UIScrollView *scrollView;
 @end
 
 @implementation PanelRosa
@@ -10,8 +11,10 @@
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        self.backgroundColor = [[UIColor colorWithRed:1.0 green:0.4 blue:0.7 alpha:0.85] colorWithAlphaComponent:0.85];
+        self.backgroundColor = [[UIColor colorWithRed:1.0 green:0.4 blue:0.7 alpha:0.9] colorWithAlphaComponent:0.9];
         self.layer.cornerRadius = 20;
+        self.clipsToBounds = YES;
+        
         UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight];
         UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
         blurView.frame = self.bounds; [self insertSubview:blurView atIndex:0];
@@ -26,55 +29,78 @@
         [closeBtn addTarget:self action:@selector(ocultar) forControlEvents:UIControlEventTouchUpInside];
         [self addSubview:closeBtn];
 
-        CGFloat y = 60;
+        self.scrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 50, frame.size.width, frame.size.height - 50)];
+        self.scrollView.showsVerticalScrollIndicator = YES;
+        [self addSubview:self.scrollView];
+
+        CGFloat y = 10;
         y = [self addSlider:@"Gain (dB)" min:-20 max:100 def:0 tag:1 y:y];
         y = [self addSlider:@"Pitch (Tono)" min:0.5 max:2.0 def:1.0 tag:2 y:y];
         
         UIButton *btnLoad = [UIButton buttonWithType:UIButtonTypeSystem];
-        btnLoad.frame = CGRectMake(20, y, 100, 40); [btnLoad setTitle:@"Cargar MP3" forState:UIControlStateNormal];
-        [btnLoad setBackgroundColor:[UIColor darkGrayColor]]; [btnLoad setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        [btnLoad addTarget:self action:@selector(abrirPicker) forControlEvents:UIControlEventTouchUpInside];
-        [self addSubview:btnLoad];
+        btnLoad.frame = CGRectMake(15, y, 100, 40); [btnLoad setTitle:@"Cargar MP3" forState:UIControlStateNormal];
+        [btnLoad setBackgroundColor:[UIColor darkGrayColor]]; [btnLoad setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal]; [btnLoad addTarget:self action:@selector(abrirPicker) forControlEvents:UIControlEventTouchUpInside];
+        [self.scrollView addSubview:btnLoad];
         
         UIButton *btnPlay = [UIButton buttonWithType:UIButtonTypeSystem];
-        btnPlay.frame = CGRectMake(130, y, 70, 40); [btnPlay setTitle:@"Play" forState:UIControlStateNormal];
-        [btnPlay setBackgroundColor:[UIColor greenColor]]; [btnPlay setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        [btnPlay addTarget:self action:@selector(play) forControlEvents:UIControlEventTouchUpInside];
-        [self addSubview:btnPlay];
+        btnPlay.frame = CGRectMake(125, y, 70, 40); [btnPlay setTitle:@"Play" forState:UIControlStateNormal];
+        [btnPlay setBackgroundColor:[UIColor greenColor]]; [btnPlay setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal]; [btnPlay addTarget:self action:@selector(play) forControlEvents:UIControlEventTouchUpInside];
+        [self.scrollView addSubview:btnPlay];
 
         UIButton *btnStop = [UIButton buttonWithType:UIButtonTypeSystem];
-        btnStop.frame = CGRectMake(210, y, 70, 40); [btnStop setTitle:@"Stop" forState:UIControlStateNormal];
-        [btnStop setBackgroundColor:[UIColor redColor]]; [btnStop setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        [btnStop addTarget:self action:@selector(stop) forControlEvents:UIControlEventTouchUpInside];
-        [self addSubview:btnStop];
+        btnStop.frame = CGRectMake(205, y, 70, 40); [btnStop setTitle:@"Stop" forState:UIControlStateNormal];
+        [btnStop setBackgroundColor:[UIColor redColor]]; [btnStop setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal]; [btnStop addTarget:self action:@selector(stop) forControlEvents:UIControlEventTouchUpInside];
+        [self.scrollView addSubview:btnStop];
         
         y += 60;
         y = [self addSwitch:@"Mutear mi voz al sonar MP3" tag:3 y:y];
+        
+        UIView *spoofCard = [[UIView alloc] initWithFrame:CGRectMake(15, y, self.bounds.size.width - 30, 100)];
+        spoofCard.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.2]; spoofCard.layer.cornerRadius = 10;
+        UILabel *spoofLbl = [[UILabel alloc] initWithFrame:CGRectMake(10, 5, 200, 20)];
+        spoofLbl.text = @"Plataforma Spoofer"; spoofLbl.textColor = [UIColor whiteColor]; spoofLbl.font = [UIFont boldSystemFontOfSize:14];
+        [spoofCard addSubview:spoofLbl];
+        
+        UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[@"iOS", @"PC", @"VR", @"Android"]];
+        seg.frame = CGRectMake(10, 30, spoofCard.bounds.size.width - 20, 32);
+        seg.selectedSegmentIndex = 0;
+        seg.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.4];
+        [seg addTarget:self action:@selector(spooferChanged:) forControlEvents:UIControlEventValueChanged];
+        [spoofCard addSubview:seg];
+        
+        UILabel *spoofDesc = [[UILabel alloc] initWithFrame:CGRectMake(10, 65, spoofCard.bounds.size.width - 20, 30)];
+        spoofDesc.text = @"Cambia cómo Discord ve tu dispositivo."; spoofDesc.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.7]; spoofDesc.font = [UIFont systemFontOfSize:11];
+        [spoofCard addSubview:spoofDesc];
+        
+        [self.scrollView addSubview:spoofCard];
+        y += 110;
+        self.scrollView.contentSize = CGSizeMake(frame.size.width, y + 20);
     }
     return self;
 }
 
 - (CGFloat)addSlider:(NSString *)titulo min:(float)min max:(float)max def:(float)def tag:(int)tag y:(CGFloat)y {
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(20, y, self.bounds.size.width - 40, 60)];
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, self.bounds.size.width - 30, 60)];
     card.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.2]; card.layer.cornerRadius = 10;
     UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(10, 5, 200, 20)]; lbl.text = titulo; lbl.textColor = [UIColor whiteColor]; [card addSubview:lbl];
     UISlider *s = [[UISlider alloc] initWithFrame:CGRectMake(10, 25, card.bounds.size.width - 20, 30)];
     s.minimumValue = min; s.maximumValue = max; s.value = def; s.tag = tag;
     [s addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
-    [card addSubview:s]; [self addSubview:card]; return y + 70;
+    [card addSubview:s]; [self.scrollView addSubview:card]; return y + 70;
 }
 
 - (CGFloat)addSwitch:(NSString *)titulo tag:(int)tag y:(CGFloat)y {
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(20, y, self.bounds.size.width - 40, 50)];
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, self.bounds.size.width - 30, 50)];
     card.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.2]; card.layer.cornerRadius = 10;
-    UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, card.bounds.size.width - 60, 50)]; lbl.text = titulo; lbl.textColor = [UIColor whiteColor]; [card addSubview:lbl];
+    UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, card.bounds.size.width - 60, 50)]; lbl.text = titulo; lbl.textColor = [UIColor whiteColor]; lbl.font = [UIFont systemFontOfSize:13]; [card addSubview:lbl];
     UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectZero]; sw.center = CGPointMake(card.bounds.size.width - 35, 25); sw.tag = tag;
     [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-    [card addSubview:sw]; [self addSubview:card]; return y + 60;
+    [card addSubview:sw]; [self.scrollView addSubview:card]; return y + 60;
 }
 
 - (void)sliderChanged:(UISlider *)s { if (s.tag == 1) gGainDB = s.value; if (s.tag == 2) gPitchAmount = s.value; }
 - (void)switchChanged:(UISwitch *)s { if (s.tag == 3) gMuteMicOnPlay = s.isOn; }
+- (void)spooferChanged:(UISegmentedControl *)s { gSpooferMode = (int)s.selectedSegmentIndex; }
 - (void)abrirPicker { UIDocumentPickerViewController *p = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio]]; p.delegate = self; [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:p animated:YES completion:nil]; }
 - (void)documentPicker:(UIDocumentPickerViewController *)c didPickDocumentsAtURLs:(NSArray<NSURL *> *)u { if (u.count) CargarMP3(u.firstObject); }
 - (void)play { PlayMP3(); }
@@ -84,6 +110,7 @@
 
 @interface Bolita : UIButton
 @property (nonatomic, strong) PanelRosa *panel;
+@property (nonatomic, assign) BOOL isPanelOpen;
 @end
 
 @implementation Bolita
@@ -101,6 +128,7 @@
         [self addTarget:self action:@selector(tocado) forControlEvents:UIControlEventTouchUpInside];
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(arrastrar:)];
         [self addGestureRecognizer:pan];
+        self.isPanelOpen = NO;
     }
     return self;
 }
@@ -113,19 +141,22 @@
 - (void)tocado {
     UIWindow *window = self.window; if (!window) return;
     if (!self.panel) {
-        CGFloat alto = 500;
+        CGFloat alto = 520;
         self.panel = [[PanelRosa alloc] initWithFrame:CGRectMake(20, window.bounds.size.height, window.bounds.size.width - 40, alto)];
         self.panel.center = CGPointMake(window.center.x, window.bounds.size.height + alto/2);
         [window addSubview:self.panel];
     }
-    if (self.panel.transform.ty == 0) {
+    if (!self.isPanelOpen) {
         [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5 options:0 animations:^{
             self.panel.center = CGPointMake(window.center.x, window.center.y);
+            self.panel.transform = CGAffineTransformIdentity;
         } completion:nil];
+        self.isPanelOpen = YES;
     } else {
         [UIView animateWithDuration:0.3 animations:^{
-            self.panel.center = CGPointMake(window.center.x, window.bounds.size.height + 250);
+            self.panel.center = CGPointMake(window.center.x, window.bounds.size.height + 260);
         }];
+        self.isPanelOpen = NO;
     }
 }
 @end
