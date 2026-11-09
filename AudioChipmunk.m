@@ -10,12 +10,13 @@ BOOL gMuteMicOnPlay = NO;
 BOOL gIsMp3Playing = NO;
 int gSpooferMode = 0;
 
+// Buffers del MP3
 static float *mp3Left = NULL;
 static float *mp3Right = NULL;
 static long mp3TotalFrames = 0;
 static double mp3Playhead = 0.0; 
-static double mp3FileSampleRate = 48000.0;
 
+// Pitch Shifter Seguro
 #define PITCH_BUFFER_SIZE 4096
 static float pitchBuffer[PITCH_BUFFER_SIZE];
 static int pitchWriteIdx = 0;
@@ -54,22 +55,29 @@ void CargarMP3(NSURL *url) {
     if (mp3Left) { free(mp3Left); mp3Left = NULL; }
     if (mp3Right) { free(mp3Right); mp3Right = NULL; }
     
-    mp3TotalFrames = buffer.frameLength;
-    if (mp3TotalFrames <= 0) return;
+    // --- REMUESTREADOR MANUAL A 48000 Hz (Evita el ralentizado) ---
+    double targetRate = 48000.0;
+    double sourceRate = fileFormat.sampleRate;
+    double ratio = sourceRate / targetRate;
     
-    mp3FileSampleRate = fileFormat.sampleRate; 
+    long sourceLength = buffer.frameLength;
+    long targetLength = (long)(sourceLength / ratio) + 1;
     
-    mp3Left = (float *)malloc(mp3TotalFrames * sizeof(float));
-    mp3Right = (float *)malloc(mp3TotalFrames * sizeof(float));
-    
-    if (!mp3Left || !mp3Right) return; // Seguridad por si no hay memoria
+    mp3Left = (float *)malloc(targetLength * sizeof(float));
+    mp3Right = (float *)malloc(targetLength * sizeof(float));
+    mp3TotalFrames = targetLength;
     
     float *floatL = buffer.floatChannelData[0]; 
     float *floatR = (fileFormat.channelCount > 1) ? buffer.floatChannelData[1] : floatL;
     
-    for (long i = 0; i < mp3TotalFrames; i++) {
-        mp3Left[i] = floatL[i];
-        mp3Right[i] = floatR[i];
+    for (long i = 0; i < targetLength; i++) {
+        double srcIndex = i * ratio;
+        long idx1 = (long)srcIndex;
+        long idx2 = (idx1 + 1 < sourceLength) ? idx1 + 1 : idx1;
+        double frac = srcIndex - idx1;
+        
+        mp3Left[i] = floatL[idx1] * (1.0 - frac) + floatL[idx2] * frac;
+        mp3Right[i] = floatR[idx1] * (1.0 - frac) + floatR[idx2] * frac;
     }
     
     mp3Playhead = 0.0;
@@ -86,13 +94,11 @@ void PlayMP3(void) { mp3Playhead = 0.0; gIsMp3Playing = YES; }
 void StopMP3(void) { gIsMp3Playing = NO; }
 
 static float ApplyPitch(float sample) {
-    // Protección contra valores infinitos o NaN
     if (isnan(sample) || isinf(sample)) sample = 0.0f;
     
     pitchBuffer[pitchWriteIdx] = sample;
     float pitchFactor = powf(2.0f, gPitchSemitones / 12.0f);
     
-    // Asegurar que los índices estén en rango válido
     if (pitchReadIdxA < 0 || pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA = 0;
     if (pitchReadIdxB < 0 || pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB = PITCH_BUFFER_SIZE / 2;
     
@@ -112,7 +118,7 @@ static float ApplyPitch(float sample) {
     if (pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA -= PITCH_BUFFER_SIZE;
     if (pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB -= PITCH_BUFFER_SIZE;
     
-    // Evitar el "doble/eco" alejando los punteros
+    // Evitar el "doble/eco"
     float distA = pitchWriteIdx - pitchReadIdxA;
     if (distA < 0) distA += PITCH_BUFFER_SIZE;
     if (distA < 512) { pitchReadIdxA -= 512; if (pitchReadIdxA < 0) pitchReadIdxA += PITCH_BUFFER_SIZE; }
@@ -127,19 +133,18 @@ static float ApplyPitch(float sample) {
 static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *ioActionFlags, const AudioTimeStamp *inTimeStamp, UInt32 inOutputBusNumber, UInt32 inNumberFrames, AudioBufferList *ioData) {
     OSStatus status = orig_AudioUnitRender(inUnit, ioActionFlags, inTimeStamp, inOutputBusNumber, inNumberFrames, ioData);
     
-    // PROTECCIÓN 1: Validar que ioData y los buffers existan
     if (status != noErr || !ioData || ioData->mNumberBuffers == 0 || inOutputBusNumber != 1) {
         return status;
     }
     
-    Float64 hwSR = 48000.0;
-    UInt32 size = sizeof(hwSR);
-    AudioUnitGetProperty(inUnit, kAudioUnitProperty_SampleRate, kAudioUnitScope_Output, 0, &hwSR, &size);
-    double step = (hwSR > 0) ? (mp3FileSampleRate / hwSR) : 1.0;
+    // Obtener la frecuencia real de la sesión (evita el ralentizado si Discord usa 16kHz o 24kHz)
+    Float64 currentRate = AVAudioSession.sharedInstance.sampleRate;
+    if (currentRate <= 0) currentRate = 48000.0;
+    
+    // Si el MP3 fue forzado a 48kHz, y Discord usa 48kHz, el step es 1.0 (velocidad normal)
+    double step = 48000.0 / currentRate; 
     
     float gainLinear = powf(10.0f, (gGainDB / 20.0f));
-    
-    // PROTECCIÓN 2: Identificar si es entrelazado (1 buffer) o separado (2 buffers)
     BOOL isInterleaved = (ioData->mNumberBuffers == 1);
     
     SInt16 *buf0 = (SInt16 *)ioData->mBuffers[0].mData;
@@ -147,16 +152,14 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
 
     if (!buf0) return status;
 
-    // PROTECCIÓN 3: Asegurar que no iteramos más muestras de las que hay en el buffer
     UInt32 samplesPerBuffer = ioData->mBuffers[0].mDataByteSize / sizeof(SInt16);
     UInt32 framesToProcess = isInterleaved ? (samplesPerBuffer / 2) : samplesPerBuffer;
-    if (framesToProcess > inNumberFrames) framesToProcess = inNumberFrames; // Límite duro
+    if (framesToProcess > inNumberFrames) framesToProcess = inNumberFrames; 
 
     for (UInt32 frame = 0; frame < framesToProcess; frame++) {
         
         float micL = 0.0f, micR = 0.0f;
         
-        // LECTURA SEGURA DEL MICRÓFONO
         if (isInterleaved) {
             if (frame * 2 + 1 < samplesPerBuffer) {
                 micL = (float)buf0[frame * 2] / 32768.0f;
@@ -168,7 +171,7 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
                 micR = (float)buf1[frame] / 32768.0f;
             } else {
                 micL = (float)buf0[frame] / 32768.0f;
-                micR = micL; // Si es mono, copiamos
+                micR = micL;
             }
         }
         
@@ -176,7 +179,6 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
 
         float mp3L = 0.0f, mp3R = 0.0f;
         
-        // LECTURA SEGURA DEL MP3
         if (gIsMp3Playing && mp3Left && mp3Right && mp3TotalFrames > 0) {
             long idx1 = (long)mp3Playhead;
             if (idx1 < 0) idx1 = 0;
@@ -196,7 +198,8 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
         float mixL = (micL * 0.8f) + (mp3L * 0.8f);
         float mixR = (micR * 0.8f) + (mp3R * 0.8f);
         
-        if (gPitchSemitones != 0.0f) {
+        // Bypass total si el pitch está en 0 (Calidad original intacta)
+        if (fabs(gPitchSemitones) > 0.01f) {
             mixL = ApplyPitch(mixL);
             mixR = ApplyPitch(mixR);
         }
@@ -204,11 +207,9 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
         mixL *= gainLinear;
         mixR *= gainLinear;
         
-        // Clipping
         if (mixL > 1.0f) mixL = 1.0f; if (mixL < -1.0f) mixL = -1.0f;
         if (mixR > 1.0f) mixR = 1.0f; if (mixR < -1.0f) mixR = -1.0f;
 
-        // ESCRITURA SEGURA EN EL BUFFER
         if (isInterleaved) {
             if (frame * 2 + 1 < samplesPerBuffer) {
                 buf0[frame * 2] = (SInt16)(mixL * 32767.0f);
