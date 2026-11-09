@@ -1,83 +1,45 @@
 #import "Comun.h"
 #import <os/log.h>
-#import <objc/runtime.h>
+#import <AudioToolbox/AudioToolbox.h>
 
-// ============================================================
-// 1. DEFINICIÓN REAL DE VARIABLES
-// ============================================================
+// Variables globales (asegúrate de que estén en Comun.h)
 float gGainDB = 1.0f;
 float gPitchAmount = 0.0f;
 BOOL gMuteMicOnPlay = NO;
 BOOL gSelfMonitor = NO;
-
-// Variable global del reproductor (ya no tiene "static")
 AVAudioPlayer *gMP3Player = nil;
-static NSURL *gCurrentAudioURL = nil;
 
-// ============================================================
-// 2. LÓGICA DEL REPRODUCTOR MP3
-// ============================================================
-void gCargarYReproducirAudio(NSURL *url) {
-    if (!url) return;
-    gCurrentAudioURL = url;
+// Función de procesamiento de audio
+static OSStatus inputRenderCallback(void *inRefCon, AudioUnitRenderActionFlags *ioActionFlags, const AudioTimeStamp *inTimeStamp, UInt32 inBusNumber, UInt32 inNumberFrames, AudioBufferList *ioData) {
+    // Aquí se procesaría el audio real del micrófono
+    // Si el hook funciona, verás este log en la consola
+    os_log(OS_LOG_DEFAULT, "[AudioHook] Procesando buffer de entrada de Discord");
+    return noErr;
+}
+
+// Hook para interceptar la creación de la unidad de audio
+static OSStatus (*orig_AudioUnitInitialize)(AudioUnit inUnit);
+static OSStatus hook_AudioUnitInitialize(AudioUnit inUnit) {
+    AudioComponentDescription desc;
+    AudioComponentInstanceGetComponent(inUnit); // Obtener descripción
+    os_log(OS_LOG_DEFAULT, "[AudioHook] AudioUnitInitialize interceptado");
     
-    NSError *error = nil;
-    gMP3Player = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&error];
-    if (error) {
-        os_log(OS_LOG_DEFAULT, "Error al cargar MP3: %@", error.localizedDescription);
-        return;
-    }
-    [gMP3Player prepareToPlay];
-    [gMP3Player play];
-}
-
-void gDetenerAudio(void) {
-    if (gMP3Player) {
-        [gMP3Player stop];
-        gMP3Player = nil;
-    }
-}
-
-// ============================================================
-// 3. HOOK DE AUDIO (Procesar la voz en la llamada)
-// ============================================================
-static void (*orig_installTap)(id, SEL, AVAudioNodeBus, AVAudioFrameCount, AVAudioFormat *, AVAudioNodeTapBlock);
-
-static void hook_installTap(id self, SEL _cmd, AVAudioNodeBus bus, AVAudioFrameCount bufferSize, AVAudioFormat *format, AVAudioNodeTapBlock tapBlock) {
-    AVAudioNodeTapBlock wrappedBlock = ^(AVAudioPCMBuffer *buf, AVAudioTime *when) {
-        if (buf && buf.floatChannelData) {
-            float *data = buf.floatChannelData[0];
-            AVAudioFrameCount frames = buf.frameLength;
-            float pitchRatio = powf(2.0f, gPitchAmount / 12.0f);
-
-            for (AVAudioFrameCount i = 0; i < frames; i++) {
-                // 1. Aplicar Ganancia (DB)
-                data[i] *= gGainDB;
-                
-                // 2. Aplicar Pitch (Tono)
-                size_t srcIndex = (size_t)(i * pitchRatio);
-                if (srcIndex < frames) {
-                    data[i] = data[srcIndex];
-                }
-            }
-        }
-        if (tapBlock) tapBlock(buf, when);
-    };
-
-    if (orig_installTap) {
-        orig_installTap(self, _cmd, bus, bufferSize, format, wrappedBlock);
-    }
+    // Si es una unidad de VoiceProcessingIO (la que usa Discord)
+    // Podríamos intentar añadir un callback de entrada aquí
+    return orig_AudioUnitInitialize(inUnit);
 }
 
 __attribute__((constructor))
 static void initAudioEngine(void) {
-    Class nodeClass = NSClassFromString(@"AVAudioNode");
-    if (nodeClass) {
-        SEL sel = @selector(installTapOnBus:bufferSize:format:block:);
-        Method m = class_getInstanceMethod(nodeClass, sel);
-        if (m) {
-            orig_installTap = (void *)method_getImplementation(m);
-            method_setImplementation(m, (IMP)hook_installTap);
+    os_log(OS_LOG_DEFAULT, "[AudioHook] Dylib cargado correctamente");
+    
+    // Hookear AudioUnitInitialize
+    void *handle = dlopen("/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox", RTLD_LAZY);
+    if (handle) {
+        orig_AudioUnitInitialize = dlsym(handle, "AudioUnitInitialize");
+        if (orig_AudioUnitInitialize) {
+            // Aquí se aplicaría el hook real (requiere MSHookFunction o similar)
+            os_log(OS_LOG_DEFAULT, "[AudioHook] Símbolo AudioUnitInitialize encontrado");
         }
     }
 }
