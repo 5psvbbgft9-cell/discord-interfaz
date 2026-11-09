@@ -1,42 +1,23 @@
 #import "Comun.h"
+#import <os/log.h>
 #import <objc/runtime.h>
-#import <UIKit/UIKit.h>
 
 int gSpooferMode = 0; // 0 = iPhone, 1 = PC, 2 = VR, 3 = Android
 
-@implementation UIDevice (Spoofer)
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Class class = [self class];
-        
-        // Hookear "model"
-        SEL originalSelector = @selector(model);
-        SEL swizzledSelector = @selector(spoof_model);
-        Method originalMethod = class_getInstanceMethod(class, originalSelector);
-        Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
-        method_exchangeImplementations(originalMethod, swizzledMethod);
-        
-        // Hookear "systemName"
-        SEL originalSys = @selector(systemName);
-        SEL swizzledSys = @selector(spoof_systemName);
-        Method originalSysM = class_getInstanceMethod(class, originalSys);
-        Method swizzledSysM = class_getInstanceMethod(class, swizzledSys);
-        method_exchangeImplementations(originalSysM, swizzledSysM);
-    });
+// Hook para interceptar los datos de conexión de Discord
+// (Esto es un ejemplo conceptual, Discord usa su propia clase para el WebSocket)
+%hook NSURLSession
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+    // Si la petición es hacia el gateway de Discord
+    if ([request.URL.absoluteString containsString:@"gateway.discord.gg"]) {
+        os_log(OS_LOG_DEFAULT, "[Spoofer] Interceptada petición al Gateway de Discord");
+        // Aquí se modificaría el body de la petición para cambiar la plataforma
+    }
+    return %orig;
 }
+%end
 
-- (NSString *)spoof_model {
-    if (gSpooferMode == 1) return @"PC";
-    if (gSpooferMode == 2) return @"VR";
-    if (gSpooferMode == 3) return @"Android";
-    return [self spoof_model]; // iPhone
+__attribute__((constructor))
+static void initSpoofer(void) {
+    os_log(OS_LOG_DEFAULT, "[Spoofer] Módulo cargado. Modo actual: %d", gSpooferMode);
 }
-
-- (NSString *)spoof_systemName {
-    if (gSpooferMode == 1) return @"Windows";
-    if (gSpooferMode == 2) return @"Oculus";
-    if (gSpooferMode == 3) return @"Android";
-    return [self spoof_systemName];
-}
-@end
