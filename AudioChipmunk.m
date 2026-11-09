@@ -13,14 +13,14 @@ static SInt16 *mp3Samples = NULL;
 static long mp3TotalSamples = 0;
 static long mp3CurrentIndex = 0;
 
-#define PITCH_BUFFER_SIZE 4096
+#define PITCH_BUFFER_SIZE 8192
 static float pitchBuffer[PITCH_BUFFER_SIZE];
 static int pitchWriteIdx = 0;
 static float pitchReadIdxA = 0.0f;
 static float pitchReadIdxB = (float)(PITCH_BUFFER_SIZE / 2);
 static float windowTable[PITCH_BUFFER_SIZE];
 static BOOL isPitchInitialized = NO;
-static float lastFilteredSample = 0.0f; // Para el filtro
+static float smoothSample = 0.0f;
 
 static void InitPitch() {
     if (isPitchInitialized) return;
@@ -37,9 +37,7 @@ __attribute__((used)) static struct { \
 } _interpose_##_replacee __attribute__((section("__DATA,__interpose"))) = \
     { (const void *)(unsigned long)&_replacement, (const void *)(unsigned long)&_replacee };
 
-static OSStatus (*orig_AudioUnitRender)(AudioUnit, AudioUnitRenderActionFlags *,
-                                         const AudioTimeStamp *, UInt32, UInt32,
-                                         AudioBufferList *) = AudioUnitRender;
+static OSStatus (*orig_AudioUnitRender)(AudioUnit, AudioUnitRenderActionFlags *, const AudioTimeStamp *, UInt32, UInt32, AudioBufferList *) = AudioUnitRender;
 
 void CargarMP3(NSURL *url) {
     NSError *error;
@@ -92,14 +90,12 @@ static float ApplyPitch(float sample) {
     if (pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA -= PITCH_BUFFER_SIZE;
     if (pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB -= PITCH_BUFFER_SIZE;
     
-    // Filtro Paso Bajo para quitar el ruido metálico del Pitch
-    lastFilteredSample = lastFilteredSample * 0.85f + outSample * 0.15f;
-    return lastFilteredSample;
+    // Suavizado para quitar el ruido metálico
+    smoothSample = smoothSample * 0.5f + outSample * 0.5f;
+    return smoothSample;
 }
 
-static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *ioActionFlags,
-                                   const AudioTimeStamp *inTimeStamp, UInt32 inOutputBusNumber,
-                                   UInt32 inNumberFrames, AudioBufferList *ioData) {
+static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *ioActionFlags, const AudioTimeStamp *inTimeStamp, UInt32 inOutputBusNumber, UInt32 inNumberFrames, AudioBufferList *ioData) {
     OSStatus status = orig_AudioUnitRender(inUnit, ioActionFlags, inTimeStamp, inOutputBusNumber, inNumberFrames, ioData);
     
     if (status == noErr && inOutputBusNumber == 1 && ioData != NULL) {
