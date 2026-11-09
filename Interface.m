@@ -79,14 +79,37 @@
     return self;
 }
 
+// --- NUEVA FUNCIÓN DE SLIDER CON ETIQUETA DE VALOR ---
 - (CGFloat)addSlider:(NSString *)titulo min:(float)min max:(float)max def:(float)def tag:(int)tag y:(CGFloat)y {
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, self.bounds.size.width - 30, 60)];
     card.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.2]; card.layer.cornerRadius = 10;
-    UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(10, 5, 200, 20)]; lbl.text = titulo; lbl.textColor = [UIColor whiteColor]; [card addSubview:lbl];
+    
+    // Etiqueta del título
+    UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(10, 5, 150, 20)]; 
+    lbl.text = titulo; lbl.textColor = [UIColor whiteColor]; lbl.font = [UIFont boldSystemFontOfSize:13];
+    [card addSubview:lbl];
+    
+    // Etiqueta del valor (Alineada a la derecha)
+    UILabel *valLbl = [[UILabel alloc] initWithFrame:CGRectMake(card.bounds.size.width - 90, 5, 80, 20)];
+    valLbl.textColor = [UIColor whiteColor];
+    valLbl.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightBold];
+    valLbl.textAlignment = NSTextAlignmentRight;
+    valLbl.tag = tag + 100; // Usamos tag + 100 para identificar este label luego
+    
+    // Formatear el texto inicial (+0.0 o -0.0)
+    if (tag == 1) valLbl.text = [NSString stringWithFormat:@"%+.1f dB", def];
+    else valLbl.text = [NSString stringWithFormat:@"%+.1f st", def];
+    
+    [card addSubview:valLbl];
+    
+    // Slider
     UISlider *s = [[UISlider alloc] initWithFrame:CGRectMake(10, 25, card.bounds.size.width - 20, 30)];
     s.minimumValue = min; s.maximumValue = max; s.value = def; s.tag = tag;
     [s addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
-    [card addSubview:s]; [self.scrollView addSubview:card]; return y + 70;
+    [card addSubview:s]; 
+    
+    [self.scrollView addSubview:card]; 
+    return y + 70;
 }
 
 - (CGFloat)addSwitch:(NSString *)titulo tag:(int)tag y:(CGFloat)y {
@@ -98,10 +121,21 @@
     [card addSubview:sw]; [self.scrollView addSubview:card]; return y + 60;
 }
 
+// --- ACTUALIZAR EL TEXTO CUANDO SE MUEVE EL SLIDER ---
 - (void)sliderChanged:(UISlider *)s { 
-    if (s.tag == 1) gGainDB = s.value; 
-    if (s.tag == 2) gPitchSemitones = s.value; 
+    // Buscamos la etiqueta de valor usando el tag + 100
+    UILabel *valLbl = (UILabel *)[self.scrollView viewWithTag:s.tag + 100];
+    
+    if (s.tag == 1) { 
+        gGainDB = s.value; 
+        if (valLbl) valLbl.text = [NSString stringWithFormat:@"%+.1f dB", s.value];
+    } 
+    if (s.tag == 2) { 
+        gPitchSemitones = s.value; 
+        if (valLbl) valLbl.text = [NSString stringWithFormat:@"%+.1f st", s.value];
+    }
 }
+
 - (void)switchChanged:(UISwitch *)s { if (s.tag == 3) gMuteMicOnPlay = s.isOn; }
 - (void)spooferChanged:(UISegmentedControl *)s { gSpooferMode = (int)s.selectedSegmentIndex; }
 - (void)abrirPicker { UIDocumentPickerViewController *p = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio]]; p.delegate = self; [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:p animated:YES completion:nil]; }
@@ -111,6 +145,7 @@
 - (void)ocultar { [UIView animateWithDuration:0.3 animations:^{ self.transform = CGAffineTransformMakeTranslation(0, self.bounds.size.height); }]; }
 @end
 
+// --- BOLITA Y INYECCIÓN (IGUAL QUE ANTES) ---
 @interface Bolita : UIButton
 @property (nonatomic, strong) PanelRosa *panel;
 @property (nonatomic, assign) BOOL isPanelOpen;
