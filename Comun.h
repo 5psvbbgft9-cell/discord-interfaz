@@ -4,6 +4,7 @@ extern float gGainDB;
 extern float gPitchSemitones;
 extern BOOL gMuteMicOnPlay;
 extern BOOL gIsMp3Playing;
+extern BOOL gStreamMode;
 extern int gSpooferMode;
 
 void CargarMP3(NSURL *url);
