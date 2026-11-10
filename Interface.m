@@ -3,6 +3,24 @@
 #import <math.h>
 #import "Comun.h"
 
+@interface SecureWindow : UIWindow
+@property (nonatomic, strong) UITextField *secureTextField;
+@end
+
+@implementation SecureWindow
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.secureTextField = [[UITextField alloc] initWithFrame:self.bounds];
+        self.secureTextField.secureTextEntry = YES;
+        [self addSubview:self.secureTextField];
+        UIView *secureCanvas = [self.secureTextField.subviews firstObject];
+        if (secureCanvas) { [self addSubview:secureCanvas]; }
+    }
+    return self;
+}
+@end
+
 @interface PanelRosa : UIView <UIDocumentPickerDelegate>
 @property (nonatomic, strong) UIScrollView *scrollView;
 @end
@@ -12,7 +30,7 @@
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        self.backgroundColor = [[UIColor colorWithRed:1.0 green:0.4 blue:0.7 alpha:0.9] colorWithAlphaComponent:0.9];
+        self.backgroundColor = [[UIColor colorWithRed:1.0 green:0.4 blue:0.7 alpha:0.95] colorWithAlphaComponent:0.95];
         self.layer.cornerRadius = 20;
         self.clipsToBounds = YES;
         
@@ -69,10 +87,6 @@
         [seg addTarget:self action:@selector(spooferChanged:) forControlEvents:UIControlEventValueChanged];
         [spoofCard addSubview:seg];
         
-        UILabel *spoofDesc = [[UILabel alloc] initWithFrame:CGRectMake(10, 65, spoofCard.bounds.size.width - 20, 30)];
-        spoofDesc.text = @"Cambia cómo Discord ve tu dispositivo."; spoofDesc.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.7]; spoofDesc.font = [UIFont systemFontOfSize:11];
-        [spoofCard addSubview:spoofDesc];
-        
         [self.scrollView addSubview:spoofCard];
         y += 110;
         self.scrollView.contentSize = CGSizeMake(frame.size.width, y + 20);
@@ -102,7 +116,6 @@
     UISlider *s = [[UISlider alloc] initWithFrame:CGRectMake(10, 25, card.bounds.size.width - 20, 30)];
     s.minimumValue = min; s.maximumValue = max; s.value = def; s.tag = tag;
     [s addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
-    [s addTarget:self action:@selector(sliderEnded:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside];
     [card addSubview:s]; 
     
     [self.scrollView addSubview:card]; 
@@ -120,7 +133,6 @@
 
 - (void)sliderChanged:(UISlider *)s { 
     UILabel *valLbl = (UILabel *)[self.scrollView viewWithTag:s.tag + 100];
-    
     if (s.tag == 1) { 
         gGainDB = s.value; 
         if (valLbl) valLbl.text = [NSString stringWithFormat:@"%+.1f dB", s.value];
@@ -128,16 +140,6 @@
     if (s.tag == 2) { 
         gPitchSemitones = s.value; 
         if (valLbl) valLbl.text = [NSString stringWithFormat:@"%+.1f st", s.value];
-    }
-}
-
-- (void)sliderEnded:(UISlider *)s {
-    // MAGIA: Si el pitch está muy cerca de 0, lo forzamos a 0 exacto.
-    if (s.tag == 2 && fabsf(s.value) < 0.5f) {
-        s.value = 0.0f;
-        gPitchSemitones = 0.0f;
-        UILabel *valLbl = (UILabel *)[self.scrollView viewWithTag:s.tag + 100];
-        if (valLbl) valLbl.text = @"+0.0 st";
     }
 }
 
@@ -164,7 +166,6 @@
         self.layer.shadowColor = [UIColor blackColor].CGColor;
         self.layer.shadowOpacity = 0.5;
         self.layer.shadowOffset = CGSizeMake(0, 5);
-        self.layer.shadowRadius = 10;
         [self setTitle:@"✨" forState:UIControlStateNormal];
         self.titleLabel.font = [UIFont systemFontOfSize:28];
         [self addTarget:self action:@selector(tocado) forControlEvents:UIControlEventTouchUpInside];
@@ -206,16 +207,14 @@
 __attribute__((constructor))
 static void Iniciar(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        UIWindow *window = [UIApplication sharedApplication].keyWindow;
-        if (!window) {
-            if (@available(iOS 13.0, *)) {
-                for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                    if (scene.activationState == UISceneActivationStateForegroundActive) {
-                        window = scene.windows.firstObject; break;
-                    }
-                }
-            }
-        }
-        if (window) { Bolita *b = [[Bolita alloc] init]; [window addSubview:b]; }
+        SecureWindow *secureWin = [[SecureWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        secureWin.windowLevel = UIWindowLevelAlert + 1;
+        secureWin.backgroundColor = [UIColor clearColor];
+        secureWin.rootViewController = [[UIViewController alloc] init];
+        secureWin.rootViewController.view.backgroundColor = [UIColor clearColor];
+        [secureWin makeKeyAndVisible];
+        
+        Bolita *b = [[Bolita alloc] init];
+        [secureWin.rootViewController.view addSubview:b];
     });
 }
