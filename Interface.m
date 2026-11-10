@@ -3,19 +3,24 @@
 #import <math.h>
 #import "Comun.h"
 
+// --- TRUCO DE VENTANA SEGURA (INVISIBLE PARA GRABACIÓN) ---
 @interface SecureWindow : UIWindow
 @property (nonatomic, strong) UITextField *secureTextField;
 @end
 
 @implementation SecureWindow
-- (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
+- (instancetype)initWithWindowScene:(UIWindowScene *)windowScene {
+    self = [super initWithWindowScene:windowScene];
     if (self) {
         self.secureTextField = [[UITextField alloc] initWithFrame:self.bounds];
         self.secureTextField.secureTextEntry = YES;
+        self.secureTextField.userInteractionEnabled = NO;
         [self addSubview:self.secureTextField];
+        
         UIView *secureCanvas = [self.secureTextField.subviews firstObject];
-        if (secureCanvas) { [self addSubview:secureCanvas]; }
+        if (secureCanvas) {
+            [self addSubview:secureCanvas];
+        }
     }
     return self;
 }
@@ -86,6 +91,10 @@
         seg.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.4];
         [seg addTarget:self action:@selector(spooferChanged:) forControlEvents:UIControlEventValueChanged];
         [spoofCard addSubview:seg];
+        
+        UILabel *spoofDesc = [[UILabel alloc] initWithFrame:CGRectMake(10, 65, spoofCard.bounds.size.width - 20, 30)];
+        spoofDesc.text = @"Cambia cómo Discord ve tu dispositivo."; spoofDesc.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.7]; spoofDesc.font = [UIFont systemFontOfSize:11];
+        [spoofCard addSubview:spoofDesc];
         
         [self.scrollView addSubview:spoofCard];
         y += 110;
@@ -166,6 +175,7 @@
         self.layer.shadowColor = [UIColor blackColor].CGColor;
         self.layer.shadowOpacity = 0.5;
         self.layer.shadowOffset = CGSizeMake(0, 5);
+        self.layer.shadowRadius = 10;
         [self setTitle:@"✨" forState:UIControlStateNormal];
         self.titleLabel.font = [UIFont systemFontOfSize:28];
         [self addTarget:self action:@selector(tocado) forControlEvents:UIControlEventTouchUpInside];
@@ -204,16 +214,40 @@
 }
 @end
 
+// --- INYECCIÓN EN VENTANA SEGURA (CORREGIDO PARA iOS 13+) ---
 __attribute__((constructor))
 static void Iniciar(void) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        SecureWindow *secureWin = [[SecureWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        
+        UIWindowScene *activeScene = nil;
+        if (@available(iOS 13.0, *)) {
+            for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if (scene.activationState == UISceneActivationStateForegroundActive) {
+                    activeScene = scene;
+                    break;
+                }
+            }
+        }
+        
+        SecureWindow *secureWin = nil;
+        if (@available(iOS 13.0, *)) {
+            if (activeScene) {
+                secureWin = [[SecureWindow alloc] initWithWindowScene:activeScene];
+            }
+        }
+        
+        // Fallback por si acaso
+        if (!secureWin) {
+            secureWin = [[SecureWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        }
+        
         secureWin.windowLevel = UIWindowLevelAlert + 1;
         secureWin.backgroundColor = [UIColor clearColor];
         secureWin.rootViewController = [[UIViewController alloc] init];
         secureWin.rootViewController.view.backgroundColor = [UIColor clearColor];
-        [secureWin makeKeyAndVisible];
+        secureWin.hidden = NO; 
         
+        // Añadimos la bolita a la ventana
         Bolita *b = [[Bolita alloc] init];
         [secureWin.rootViewController.view addSubview:b];
     });
