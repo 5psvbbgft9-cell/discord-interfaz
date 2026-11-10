@@ -26,7 +26,6 @@
 }
 @end
 
-// Hook adicional para NSProcessInfo (usado por React Native)
 @implementation NSProcessInfo (Spoofer)
 + (void)load {
     static dispatch_once_t onceToken;
