@@ -15,10 +15,10 @@ static float *mp3Left = NULL;
 static float *mp3Right = NULL;
 static long mp3TotalFrames = 0;
 static double mp3Playhead = 0.0;
-static double mp3FileSampleRate = 48000.0;
+static double mp3FileSampleRate = 44100.0;
 
-// Reducido a 2048 para eliminar el eco metálico y robótico
-#define PITCH_BUFFER_SIZE 2048
+// Buffer de 4096 para alta calidad
+#define PITCH_BUFFER_SIZE 4096
 static float pitchBuffer[PITCH_BUFFER_SIZE];
 static int pitchWriteIdx = 0;
 static float pitchReadIdxA = 0.0f;
@@ -45,7 +45,7 @@ static OSStatus (*orig_AudioUnitRender)(AudioUnit, AudioUnitRenderActionFlags *,
 
 void CargarMP3(NSURL *url) {
     gIsMp3Playing = NO;
-    usleep(50000); // Esperar a que el hilo libere el audio
+    usleep(50000);
 
     NSError *error;
     AVAudioFile *file = [[AVAudioFile alloc] initForReading:url error:&error];
@@ -59,32 +59,21 @@ void CargarMP3(NSURL *url) {
     if (mp3Left) { free(mp3Left); mp3Left = NULL; }
     if (mp3Right) { free(mp3Right); mp3Right = NULL; }
     
-    // Forzamos la carga y cálculo a 48kHz (Velocidad nativa de Discord)
-    double targetRate = 48000.0; 
-    double originalRate = fileFormat.sampleRate;
-    double ratio = originalRate / targetRate;
+    mp3FileSampleRate = fileFormat.sampleRate; 
     
     long sourceLength = buffer.frameLength;
-    long targetLength = (long)(sourceLength / ratio) + 1;
-    
-    mp3Left = (float *)malloc(targetLength * sizeof(float));
-    mp3Right = (float *)malloc(targetLength * sizeof(float));
-    mp3TotalFrames = targetLength;
+    mp3Left = (float *)malloc(sourceLength * sizeof(float));
+    mp3Right = (float *)malloc(sourceLength * sizeof(float));
+    mp3TotalFrames = sourceLength;
     
     float *floatL = buffer.floatChannelData[0]; 
     float *floatR = (fileFormat.channelCount > 1) ? buffer.floatChannelData[1] : floatL;
     
-    for (long i = 0; i < targetLength; i++) {
-        double srcIndex = i * ratio;
-        long idx1 = (long)srcIndex;
-        long idx2 = (idx1 + 1 < sourceLength) ? idx1 + 1 : idx1;
-        double frac = srcIndex - idx1;
-        
-        mp3Left[i] = floatL[idx1] * (1.0 - frac) + floatL[idx2] * frac;
-        mp3Right[i] = floatR[idx1] * (1.0 - frac) + floatR[idx2] * frac;
+    for (long i = 0; i < sourceLength; i++) {
+        mp3Left[i] = floatL[i];
+        mp3Right[i] = floatR[i];
     }
     
-    mp3FileSampleRate = 48000.0; // Sincronizado a 48kHz
     mp3Playhead = 0.0;
     gIsMp3Playing = NO;
     
@@ -110,14 +99,11 @@ static float ApplyPitch(float sample) {
     int idxA = (int)pitchReadIdxA;
     int idxB = (int)pitchReadIdxB;
     
-    int nextIdxA = (idxA + 1) % PITCH_BUFFER_SIZE;
-    int nextIdxB = (idxB + 1) % PITCH_BUFFER_SIZE;
-    
     float fracA = pitchReadIdxA - idxA;
     float fracB = pitchReadIdxB - idxB;
     
-    float valA = pitchBuffer[idxA] * (1.0f - fracA) + pitchBuffer[nextIdxA] * fracA;
-    float valB = pitchBuffer[idxB] * (1.0f - fracB) + pitchBuffer[nextIdxB] * fracB;
+    float valA = pitchBuffer[idxA] * (1.0f - fracA) + pitchBuffer[(idxA + 1) % PITCH_BUFFER_SIZE] * fracA;
+    float valB = pitchBuffer[idxB] * (1.0f - fracB) + pitchBuffer[(idxB + 1) % PITCH_BUFFER_SIZE] * fracB;
     
     float fade = windowTable[idxA];
     float outSample = valA * fade + valB * (1.0f - fade);
@@ -129,18 +115,18 @@ static float ApplyPitch(float sample) {
     if (pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA -= PITCH_BUFFER_SIZE;
     if (pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB -= PITCH_BUFFER_SIZE;
     
-    // Márgenes de seguridad ajustados para evitar chasquidos y retardo robótico
+    // --- CONTROL DE SEGURIDAD (El que faltaba para quitar el ruido robótico) ---
     float distA = (float)pitchWriteIdx - pitchReadIdxA;
     if (distA < 0) distA += PITCH_BUFFER_SIZE;
-    if (distA < 128) { 
-        pitchReadIdxA -= 256; 
+    if (distA < 256) { 
+        pitchReadIdxA -= 512; 
         if (pitchReadIdxA < 0) pitchReadIdxA += PITCH_BUFFER_SIZE; 
     }
     
     float distB = (float)pitchWriteIdx - pitchReadIdxB;
     if (distB < 0) distB += PITCH_BUFFER_SIZE;
-    if (distB < 128) { 
-        pitchReadIdxB -= 256; 
+    if (distB < 256) { 
+        pitchReadIdxB -= 512; 
         if (pitchReadIdxB < 0) pitchReadIdxB += PITCH_BUFFER_SIZE; 
     }
     
@@ -152,12 +138,10 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
     
     if (status != noErr || !ioData || ioData->mNumberBuffers == 0 || inOutputBusNumber != 1) return status;
     
-    Float64 hwSR = 48000.0;
-    UInt32 size = sizeof(hwSR);
-    AudioUnitGetProperty(inUnit, kAudioUnitProperty_SampleRate, kAudioUnitScope_Output, 0, &hwSR, &size);
-    
-    // Velocidad exacta basada en 48kHz para evitar el efecto de audio "relentizado"
-    double step = (hwSR > 0) ? (48000.0 / hwSR) : 1.0;
+    // --- VELOCIDAD EXACTA (Para evitar que se escuche lento) ---
+    Float64 hwSR = [AVAudioSession sharedInstance].sampleRate;
+    if (hwSR <= 0) hwSR = 48000.0;
+    double step = (hwSR > 0) ? (mp3FileSampleRate / hwSR) : 1.0;
     
     float gainLinear = powf(10.0f, (gGainDB / 20.0f));
     BOOL isInterleaved = (ioData->mNumberBuffers == 1);
@@ -204,11 +188,12 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
             mp3R = mp3Right[idx1] * (1.0f - frac) + mp3Right[idx2] * frac;
             
             mp3Playhead += step; 
-            if (mp3Playhead >= mp3TotalFrames) mp3Playhead = 0.0;
+            if (mp3Playhead >= mp3TotalFrames) mp3Playhead -= mp3TotalFrames;
         }
 
-        float mixL = (micL * 0.5f) + (mp3L * 0.5f);
-        float mixR = (micR * 0.5f) + (mp3R * 0.5f);
+        // --- VOLUMEN COMPLETO (Para que el MP3 no suene bajito) ---
+        float mixL = micL + mp3L;
+        float mixR = micR + mp3R;
         
         if (fabsf(gPitchSemitones) > 0.01f) {
             mixL = ApplyPitch(mixL);
@@ -218,7 +203,10 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
         mixL *= gainLinear;
         mixR *= gainLinear;
         
-        // Limitador duro para evitar saturación / distorsión
+        // Soft Clipping (Evita que se unda al saturar)
+        if (mixL > 1.0f || mixL < -1.0f) mixL = tanhf(mixL);
+        if (mixR > 1.0f || mixR < -1.0f) mixR = tanhf(mixR);
+        
         if (mixL > 1.0f) mixL = 1.0f; if (mixL < -1.0f) mixL = -1.0f;
         if (mixR > 1.0f) mixR = 1.0f; if (mixR < -1.0f) mixR = -1.0f;
 
