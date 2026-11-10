@@ -3,29 +3,6 @@
 #import <math.h>
 #import "Comun.h"
 
-// --- TRUCO DE VENTANA SEGURA (INVISIBLE PARA GRABACIÓN) ---
-@interface SecureWindow : UIWindow
-@property (nonatomic, strong) UITextField *secureTextField;
-@end
-
-@implementation SecureWindow
-- (instancetype)initWithWindowScene:(UIWindowScene *)windowScene {
-    self = [super initWithWindowScene:windowScene];
-    if (self) {
-        self.secureTextField = [[UITextField alloc] initWithFrame:self.bounds];
-        self.secureTextField.secureTextEntry = YES;
-        self.secureTextField.userInteractionEnabled = NO;
-        [self addSubview:self.secureTextField];
-        
-        UIView *secureCanvas = [self.secureTextField.subviews firstObject];
-        if (secureCanvas) {
-            [self addSubview:secureCanvas];
-        }
-    }
-    return self;
-}
-@end
-
 @interface PanelRosa : UIView <UIDocumentPickerDelegate>
 @property (nonatomic, strong) UIScrollView *scrollView;
 @end
@@ -214,41 +191,33 @@
 }
 @end
 
-// --- INYECCIÓN EN VENTANA SEGURA (CORREGIDO PARA iOS 13+) ---
+// --- INYECCIÓN DIRECTA (MÉTODO CLÁSICO Y 100% FUNCIONAL) ---
 __attribute__((constructor))
 static void Iniciar(void) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *window = nil;
         
-        UIWindowScene *activeScene = nil;
+        // Buscar la ventana principal de Discord
         if (@available(iOS 13.0, *)) {
             for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
                 if (scene.activationState == UISceneActivationStateForegroundActive) {
-                    activeScene = scene;
-                    break;
+                    for (UIWindow *w in scene.windows) {
+                        if (w.isKeyWindow) { window = w; break; }
+                    }
                 }
             }
         }
         
-        SecureWindow *secureWin = nil;
-        if (@available(iOS 13.0, *)) {
-            if (activeScene) {
-                secureWin = [[SecureWindow alloc] initWithWindowScene:activeScene];
-            }
+        if (!window) window = [UIApplication sharedApplication].keyWindow;
+        if (!window) return;
+
+        // Evitar duplicar la bolita si ya está en pantalla
+        for (UIView *v in window.subviews) {
+            if ([v isKindOfClass:[Bolita class]]) return;
         }
-        
-        // Fallback por si acaso
-        if (!secureWin) {
-            secureWin = [[SecureWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-        }
-        
-        secureWin.windowLevel = UIWindowLevelAlert + 1;
-        secureWin.backgroundColor = [UIColor clearColor];
-        secureWin.rootViewController = [[UIViewController alloc] init];
-        secureWin.rootViewController.view.backgroundColor = [UIColor clearColor];
-        secureWin.hidden = NO; 
-        
-        // Añadimos la bolita a la ventana
+
+        // Añadir la bolita a la ventana de Discord
         Bolita *b = [[Bolita alloc] init];
-        [secureWin.rootViewController.view addSubview:b];
+        [window addSubview:b];
     });
 }
