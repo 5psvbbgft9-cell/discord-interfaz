@@ -17,7 +17,8 @@ static long mp3TotalFrames = 0;
 static double mp3Playhead = 0.0;
 static double mp3FileSampleRate = 48000.0;
 
-#define PITCH_BUFFER_SIZE 8192
+// Reducido a 2048 para eliminar el eco metálico y robótico
+#define PITCH_BUFFER_SIZE 2048
 static float pitchBuffer[PITCH_BUFFER_SIZE];
 static int pitchWriteIdx = 0;
 static float pitchReadIdxA = 0.0f;
@@ -58,10 +59,10 @@ void CargarMP3(NSURL *url) {
     if (mp3Left) { free(mp3Left); mp3Left = NULL; }
     if (mp3Right) { free(mp3Right); mp3Right = NULL; }
     
-    // Forzamos la carga a 48kHz (Velocidad nativa de Discord)
+    // Forzamos la carga y cálculo a 48kHz (Velocidad nativa de Discord)
     double targetRate = 48000.0; 
-    mp3FileSampleRate = fileFormat.sampleRate;
-    double ratio = mp3FileSampleRate / targetRate;
+    double originalRate = fileFormat.sampleRate;
+    double ratio = originalRate / targetRate;
     
     long sourceLength = buffer.frameLength;
     long targetLength = (long)(sourceLength / ratio) + 1;
@@ -83,6 +84,7 @@ void CargarMP3(NSURL *url) {
         mp3Right[i] = floatR[idx1] * (1.0 - frac) + floatR[idx2] * frac;
     }
     
+    mp3FileSampleRate = 48000.0; // Sincronizado a 48kHz
     mp3Playhead = 0.0;
     gIsMp3Playing = NO;
     
@@ -108,8 +110,14 @@ static float ApplyPitch(float sample) {
     int idxA = (int)pitchReadIdxA;
     int idxB = (int)pitchReadIdxB;
     
-    float valA = pitchBuffer[idxA] * (1.0f - (pitchReadIdxA - idxA)) + pitchBuffer[(idxA + 1) % PITCH_BUFFER_SIZE] * (pitchReadIdxA - idxA);
-    float valB = pitchBuffer[idxB] * (1.0f - (pitchReadIdxB - idxB)) + pitchBuffer[(idxB + 1) % PITCH_BUFFER_SIZE] * (pitchReadIdxB - idxB);
+    int nextIdxA = (idxA + 1) % PITCH_BUFFER_SIZE;
+    int nextIdxB = (idxB + 1) % PITCH_BUFFER_SIZE;
+    
+    float fracA = pitchReadIdxA - idxA;
+    float fracB = pitchReadIdxB - idxB;
+    
+    float valA = pitchBuffer[idxA] * (1.0f - fracA) + pitchBuffer[nextIdxA] * fracA;
+    float valB = pitchBuffer[idxB] * (1.0f - fracB) + pitchBuffer[nextIdxB] * fracB;
     
     float fade = windowTable[idxA];
     float outSample = valA * fade + valB * (1.0f - fade);
@@ -121,14 +129,20 @@ static float ApplyPitch(float sample) {
     if (pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA -= PITCH_BUFFER_SIZE;
     if (pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB -= PITCH_BUFFER_SIZE;
     
-    // Seguro anti-eco
-    float distA = pitchWriteIdx - pitchReadIdxA;
+    // Márgenes de seguridad ajustados para evitar chasquidos y retardo robótico
+    float distA = (float)pitchWriteIdx - pitchReadIdxA;
     if (distA < 0) distA += PITCH_BUFFER_SIZE;
-    if (distA < 512) { pitchReadIdxA -= 512; if (pitchReadIdxA < 0) pitchReadIdxA += PITCH_BUFFER_SIZE; }
+    if (distA < 128) { 
+        pitchReadIdxA -= 256; 
+        if (pitchReadIdxA < 0) pitchReadIdxA += PITCH_BUFFER_SIZE; 
+    }
     
-    float distB = pitchWriteIdx - pitchReadIdxB;
+    float distB = (float)pitchWriteIdx - pitchReadIdxB;
     if (distB < 0) distB += PITCH_BUFFER_SIZE;
-    if (distB < 512) { pitchReadIdxB -= 512; if (pitchReadIdxB < 0) pitchReadIdxB += PITCH_BUFFER_SIZE; }
+    if (distB < 128) { 
+        pitchReadIdxB -= 256; 
+        if (pitchReadIdxB < 0) pitchReadIdxB += PITCH_BUFFER_SIZE; 
+    }
     
     return outSample;
 }
@@ -142,8 +156,8 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
     UInt32 size = sizeof(hwSR);
     AudioUnitGetProperty(inUnit, kAudioUnitProperty_SampleRate, kAudioUnitScope_Output, 0, &hwSR, &size);
     
-    // STEP DINÁMICO: Evita la lentitud si Discord usa 24kHz o 16kHz
-    double step = (hwSR > 0) ? (mp3FileSampleRate / hwSR) : 1.0;
+    // Velocidad exacta basada en 48kHz para evitar el efecto de audio "relentizado"
+    double step = (hwSR > 0) ? (48000.0 / hwSR) : 1.0;
     
     float gainLinear = powf(10.0f, (gGainDB / 20.0f));
     BOOL isInterleaved = (ioData->mNumberBuffers == 1);
@@ -189,14 +203,14 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
             mp3L = mp3Left[idx1] * (1.0f - frac) + mp3Left[idx2] * frac;
             mp3R = mp3Right[idx1] * (1.0f - frac) + mp3Right[idx2] * frac;
             
-            mp3Playhead += step; // Avanza con velocidad real
+            mp3Playhead += step; 
             if (mp3Playhead >= mp3TotalFrames) mp3Playhead = 0.0;
         }
 
         float mixL = (micL * 0.5f) + (mp3L * 0.5f);
         float mixR = (micR * 0.5f) + (mp3R * 0.5f);
         
-        if (fabs(gPitchSemitones) > 0.01f) {
+        if (fabsf(gPitchSemitones) > 0.01f) {
             mixL = ApplyPitch(mixL);
             mixR = ApplyPitch(mixR);
         }
@@ -204,7 +218,7 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
         mixL *= gainLinear;
         mixR *= gainLinear;
         
-        // Limitador duro para evitar el "hundimiento"
+        // Limitador duro para evitar saturación / distorsión
         if (mixL > 1.0f) mixL = 1.0f; if (mixL < -1.0f) mixL = -1.0f;
         if (mixR > 1.0f) mixR = 1.0f; if (mixR < -1.0f) mixR = -1.0f;
 
