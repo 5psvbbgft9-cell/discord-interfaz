@@ -14,10 +14,9 @@ int gSpooferMode = 0;
 static float *mp3Left = NULL;
 static float *mp3Right = NULL;
 static long mp3TotalFrames = 0;
-static double mp3Playhead = 0.0;
 static double mp3FileSampleRate = 44100.0;
 
-// Buffer de 4096 para alta calidad
+// Buffer de 4096 para calidad, ventana de Hanning suave
 #define PITCH_BUFFER_SIZE 4096
 static float pitchBuffer[PITCH_BUFFER_SIZE];
 static int pitchWriteIdx = 0;
@@ -74,7 +73,6 @@ void CargarMP3(NSURL *url) {
         mp3Right[i] = floatR[i];
     }
     
-    mp3Playhead = 0.0;
     gIsMp3Playing = NO;
     
     memset(pitchBuffer, 0, sizeof(pitchBuffer));
@@ -84,7 +82,7 @@ void CargarMP3(NSURL *url) {
     InitPitch();
 }
 
-void PlayMP3(void) { mp3Playhead = 0.0; gIsMp3Playing = YES; }
+void PlayMP3(void) { gIsMp3Playing = YES; }
 void StopMP3(void) { gIsMp3Playing = NO; }
 
 static float ApplyPitch(float sample) {
@@ -115,7 +113,7 @@ static float ApplyPitch(float sample) {
     if (pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA -= PITCH_BUFFER_SIZE;
     if (pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB -= PITCH_BUFFER_SIZE;
     
-    // --- CONTROL DE SEGURIDAD (El que faltaba para quitar el ruido robótico) ---
+    // Control de seguridad para evitar el ruido robótico
     float distA = (float)pitchWriteIdx - pitchReadIdxA;
     if (distA < 0) distA += PITCH_BUFFER_SIZE;
     if (distA < 256) { 
@@ -138,10 +136,18 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
     
     if (status != noErr || !ioData || ioData->mNumberBuffers == 0 || inOutputBusNumber != 1) return status;
     
-    // --- VELOCIDAD EXACTA (Para evitar que se escuche lento) ---
+    // --- NUEVA FORMA DE REPRODUCIR: SINCRONIZACIÓN POR RELOJ ---
     Float64 hwSR = [AVAudioSession sharedInstance].sampleRate;
     if (hwSR <= 0) hwSR = 48000.0;
-    double step = (hwSR > 0) ? (mp3FileSampleRate / hwSR) : 1.0;
+    
+    // Calculamos la proporción entre el MP3 y el hardware de Discord
+    double ratio = mp3FileSampleRate / hwSR;
+    
+    // El reloj exacto del frame actual
+    double startTime = 0;
+    if (inTimeStamp && (inTimeStamp->mFlags & kAudioTimeStampSampleTimeValid)) {
+        startTime = inTimeStamp->mSampleTime;
+    }
     
     float gainLinear = powf(10.0f, (gGainDB / 20.0f));
     BOOL isInterleaved = (ioData->mNumberBuffers == 1);
@@ -177,21 +183,23 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
 
         float mp3L = 0.0f, mp3R = 0.0f;
         if (gIsMp3Playing && mp3Left && mp3Right && mp3TotalFrames > 0) {
-            long idx1 = (long)mp3Playhead;
-            if (idx1 < 0) idx1 = 0;
-            if (idx1 >= mp3TotalFrames) idx1 = 0;
+            // EL SECRETO: Calculamos la posición exacta basándonos en el reloj de Discord
+            double currentSampleTime = startTime + frame;
+            double mp3Pos = currentSampleTime * ratio;
             
+            // Bucle infinito para que la canción se repita
+            double mp3PosLooped = fmod(mp3Pos, (double)mp3TotalFrames);
+            if (mp3PosLooped < 0) mp3PosLooped += mp3TotalFrames;
+            
+            long idx1 = (long)mp3PosLooped;
             long idx2 = (idx1 + 1 < mp3TotalFrames) ? idx1 + 1 : 0;
-            float frac = mp3Playhead - idx1;
+            float frac = mp3PosLooped - idx1;
             
             mp3L = mp3Left[idx1] * (1.0f - frac) + mp3Left[idx2] * frac;
             mp3R = mp3Right[idx1] * (1.0f - frac) + mp3Right[idx2] * frac;
-            
-            mp3Playhead += step; 
-            if (mp3Playhead >= mp3TotalFrames) mp3Playhead -= mp3TotalFrames;
         }
 
-        // --- VOLUMEN COMPLETO (Para que el MP3 no suene bajito) ---
+        // Volumen completo
         float mixL = micL + mp3L;
         float mixR = micR + mp3R;
         
@@ -203,7 +211,6 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
         mixL *= gainLinear;
         mixR *= gainLinear;
         
-        // Soft Clipping (Evita que se unda al saturar)
         if (mixL > 1.0f || mixL < -1.0f) mixL = tanhf(mixL);
         if (mixR > 1.0f || mixR < -1.0f) mixR = tanhf(mixR);
         
