@@ -14,14 +14,21 @@ int gSpooferMode = 0;
 static float *mp3Left = NULL;
 static float *mp3Right = NULL;
 static long mp3TotalFrames = 0;
+static double mp3Playhead = 0.0;
 static double mp3FileSampleRate = 44100.0;
 
-// Buffer de 4096 para calidad, ventana de Hanning suave
+// --- PITCH SHIFTER ESTÉREO (Dos cerebros separados) ---
 #define PITCH_BUFFER_SIZE 4096
-static float pitchBuffer[PITCH_BUFFER_SIZE];
-static int pitchWriteIdx = 0;
-static float pitchReadIdxA = 0.0f;
-static float pitchReadIdxB = (float)(PITCH_BUFFER_SIZE / 2);
+
+typedef struct {
+    float buffer[PITCH_BUFFER_SIZE];
+    int writeIdx;
+    float readIdxA;
+    float readIdxB;
+} PitchShifter;
+
+static PitchShifter pitchL;
+static PitchShifter pitchR;
 static float windowTable[PITCH_BUFFER_SIZE];
 static BOOL isPitchInitialized = NO;
 
@@ -30,6 +37,13 @@ static void InitPitch() {
     for (int i = 0; i < PITCH_BUFFER_SIZE; i++) {
         windowTable[i] = 0.5f - 0.5f * cosf(2.0f * M_PI * i / PITCH_BUFFER_SIZE);
     }
+    
+    // Inicializar ambos canales
+    memset(&pitchL, 0, sizeof(PitchShifter));
+    memset(&pitchR, 0, sizeof(PitchShifter));
+    pitchL.readIdxB = PITCH_BUFFER_SIZE / 2;
+    pitchR.readIdxB = PITCH_BUFFER_SIZE / 2;
+    
     isPitchInitialized = YES;
 }
 
@@ -73,59 +87,58 @@ void CargarMP3(NSURL *url) {
         mp3Right[i] = floatR[i];
     }
     
+    mp3Playhead = 0.0;
     gIsMp3Playing = NO;
     
-    memset(pitchBuffer, 0, sizeof(pitchBuffer));
-    pitchWriteIdx = 0;
-    pitchReadIdxA = 0;
-    pitchReadIdxB = PITCH_BUFFER_SIZE / 2;
+    isPitchInitialized = NO;
     InitPitch();
 }
 
-void PlayMP3(void) { gIsMp3Playing = YES; }
+void PlayMP3(void) { mp3Playhead = 0.0; gIsMp3Playing = YES; }
 void StopMP3(void) { gIsMp3Playing = NO; }
 
-static float ApplyPitch(float sample) {
+// Procesar Pitch individual (Evita la mezcla de canales)
+static float ProcessPitch(PitchShifter *ps, float sample) {
     if (isnan(sample) || isinf(sample)) sample = 0.0f;
     
-    pitchBuffer[pitchWriteIdx] = sample;
+    ps->buffer[ps->writeIdx] = sample;
     float pitchFactor = powf(2.0f, gPitchSemitones / 12.0f);
     
-    if (pitchReadIdxA < 0 || pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA = 0;
-    if (pitchReadIdxB < 0 || pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB = PITCH_BUFFER_SIZE / 2;
+    if (ps->readIdxA < 0 || ps->readIdxA >= PITCH_BUFFER_SIZE) ps->readIdxA = 0;
+    if (ps->readIdxB < 0 || ps->readIdxB >= PITCH_BUFFER_SIZE) ps->readIdxB = PITCH_BUFFER_SIZE / 2;
     
-    int idxA = (int)pitchReadIdxA;
-    int idxB = (int)pitchReadIdxB;
+    int idxA = (int)ps->readIdxA;
+    int idxB = (int)ps->readIdxB;
     
-    float fracA = pitchReadIdxA - idxA;
-    float fracB = pitchReadIdxB - idxB;
+    float fracA = ps->readIdxA - idxA;
+    float fracB = ps->readIdxB - idxB;
     
-    float valA = pitchBuffer[idxA] * (1.0f - fracA) + pitchBuffer[(idxA + 1) % PITCH_BUFFER_SIZE] * fracA;
-    float valB = pitchBuffer[idxB] * (1.0f - fracB) + pitchBuffer[(idxB + 1) % PITCH_BUFFER_SIZE] * fracB;
+    float valA = ps->buffer[idxA] * (1.0f - fracA) + ps->buffer[(idxA + 1) % PITCH_BUFFER_SIZE] * fracA;
+    float valB = ps->buffer[idxB] * (1.0f - fracB) + ps->buffer[(idxB + 1) % PITCH_BUFFER_SIZE] * fracB;
     
     float fade = windowTable[idxA];
     float outSample = valA * fade + valB * (1.0f - fade);
     
-    pitchWriteIdx = (pitchWriteIdx + 1) % PITCH_BUFFER_SIZE;
-    pitchReadIdxA += pitchFactor;
-    pitchReadIdxB += pitchFactor;
+    ps->writeIdx = (ps->writeIdx + 1) % PITCH_BUFFER_SIZE;
+    ps->readIdxA += pitchFactor;
+    ps->readIdxB += pitchFactor;
     
-    if (pitchReadIdxA >= PITCH_BUFFER_SIZE) pitchReadIdxA -= PITCH_BUFFER_SIZE;
-    if (pitchReadIdxB >= PITCH_BUFFER_SIZE) pitchReadIdxB -= PITCH_BUFFER_SIZE;
+    if (ps->readIdxA >= PITCH_BUFFER_SIZE) ps->readIdxA -= PITCH_BUFFER_SIZE;
+    if (ps->readIdxB >= PITCH_BUFFER_SIZE) ps->readIdxB -= PITCH_BUFFER_SIZE;
     
-    // Control de seguridad para evitar el ruido robótico
-    float distA = (float)pitchWriteIdx - pitchReadIdxA;
+    // Control de seguridad anti-ruido
+    float distA = (float)ps->writeIdx - ps->readIdxA;
     if (distA < 0) distA += PITCH_BUFFER_SIZE;
     if (distA < 256) { 
-        pitchReadIdxA -= 512; 
-        if (pitchReadIdxA < 0) pitchReadIdxA += PITCH_BUFFER_SIZE; 
+        ps->readIdxA -= 512; 
+        if (ps->readIdxA < 0) ps->readIdxA += PITCH_BUFFER_SIZE; 
     }
     
-    float distB = (float)pitchWriteIdx - pitchReadIdxB;
+    float distB = (float)ps->writeIdx - ps->readIdxB;
     if (distB < 0) distB += PITCH_BUFFER_SIZE;
     if (distB < 256) { 
-        pitchReadIdxB -= 512; 
-        if (pitchReadIdxB < 0) pitchReadIdxB += PITCH_BUFFER_SIZE; 
+        ps->readIdxB -= 512; 
+        if (ps->readIdxB < 0) ps->readIdxB += PITCH_BUFFER_SIZE; 
     }
     
     return outSample;
@@ -136,76 +149,62 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
     
     if (status != noErr || !ioData || ioData->mNumberBuffers == 0 || inOutputBusNumber != 1) return status;
     
-    // --- NUEVA FORMA DE REPRODUCIR: SINCRONIZACIÓN POR RELOJ ---
     Float64 hwSR = [AVAudioSession sharedInstance].sampleRate;
     if (hwSR <= 0) hwSR = 48000.0;
     
-    // Calculamos la proporción entre el MP3 y el hardware de Discord
-    double ratio = mp3FileSampleRate / hwSR;
-    
-    // El reloj exacto del frame actual
-    double startTime = 0;
-    if (inTimeStamp && (inTimeStamp->mFlags & kAudioTimeStampSampleTimeValid)) {
-        startTime = inTimeStamp->mSampleTime;
-    }
+    // PROPORCIÓN EXACTA (Ej: 44100 / 48000 = 0.91875)
+    double step = mp3FileSampleRate / hwSR;
     
     float gainLinear = powf(10.0f, (gGainDB / 20.0f));
     BOOL isInterleaved = (ioData->mNumberBuffers == 1);
     
-    UInt32 samplesPerBuffer = ioData->mBuffers[0].mDataByteSize / sizeof(SInt16);
     SInt16 *buf0 = (SInt16 *)ioData->mBuffers[0].mData;
     SInt16 *buf1 = (ioData->mNumberBuffers > 1) ? (SInt16 *)ioData->mBuffers[1].mData : NULL;
     
     if (!buf0) return status;
-    
-    UInt32 framesToProcess = isInterleaved ? (samplesPerBuffer / 2) : samplesPerBuffer;
-    if (framesToProcess > inNumberFrames) framesToProcess = inNumberFrames;
 
-    for (UInt32 frame = 0; frame < framesToProcess; frame++) {
+    // Bucle estricto usando inNumberFrames (La única verdad)
+    for (UInt32 frame = 0; frame < inNumberFrames; frame++) {
         float micL = 0.0f, micR = 0.0f;
         
+        // LECTURA SEGURA
         if (isInterleaved) {
-            if (frame * 2 + 1 < samplesPerBuffer) {
-                micL = (float)buf0[frame * 2] / 32768.0f;
-                micR = (float)buf0[frame * 2 + 1] / 32768.0f;
-            }
+            micL = (float)buf0[frame * 2] / 32768.0f;
+            micR = (float)buf0[frame * 2 + 1] / 32768.0f;
         } else {
-            if (buf1 && frame < (ioData->mBuffers[1].mDataByteSize / sizeof(SInt16))) {
-                micL = (float)buf0[frame] / 32768.0f;
-                micR = (float)buf1[frame] / 32768.0f;
-            } else {
-                micL = (float)buf0[frame] / 32768.0f;
-                micR = micL;
-            }
+            micL = (float)buf0[frame] / 32768.0f;
+            micR = buf1 ? (float)buf1[frame] / 32768.0f : micL;
         }
         
         if (gMuteMicOnPlay && gIsMp3Playing) { micL = 0.0f; micR = 0.0f; }
 
         float mp3L = 0.0f, mp3R = 0.0f;
+        
+        // REPRODUCCIÓN EXACTA DEL MP3
         if (gIsMp3Playing && mp3Left && mp3Right && mp3TotalFrames > 0) {
-            // EL SECRETO: Calculamos la posición exacta basándonos en el reloj de Discord
-            double currentSampleTime = startTime + frame;
-            double mp3Pos = currentSampleTime * ratio;
+            long idx1 = (long)mp3Playhead;
+            if (idx1 < 0) idx1 = 0;
+            if (idx1 >= mp3TotalFrames) idx1 = 0;
             
-            // Bucle infinito para que la canción se repita
-            double mp3PosLooped = fmod(mp3Pos, (double)mp3TotalFrames);
-            if (mp3PosLooped < 0) mp3PosLooped += mp3TotalFrames;
-            
-            long idx1 = (long)mp3PosLooped;
             long idx2 = (idx1 + 1 < mp3TotalFrames) ? idx1 + 1 : 0;
-            float frac = mp3PosLooped - idx1;
+            float frac = mp3Playhead - idx1;
             
             mp3L = mp3Left[idx1] * (1.0f - frac) + mp3Left[idx2] * frac;
             mp3R = mp3Right[idx1] * (1.0f - frac) + mp3Right[idx2] * frac;
+            
+            // Avanzar exactamente 1 frame
+            mp3Playhead += step; 
+            if (mp3Playhead >= mp3TotalFrames) mp3Playhead -= mp3TotalFrames;
         }
 
-        // Volumen completo
+        // Mezclar
         float mixL = micL + mp3L;
         float mixR = micR + mp3R;
         
+        // APLICAR PITCH (Separado por canal)
         if (fabsf(gPitchSemitones) > 0.01f) {
-            mixL = ApplyPitch(mixL);
-            mixR = ApplyPitch(mixR);
+            mixL = ProcessPitch(&pitchL, mixL);
+            mixR = ProcessPitch(&pitchR, mixR);
         }
         
         mixL *= gainLinear;
@@ -217,11 +216,10 @@ static OSStatus MyAudioUnitRender(AudioUnit inUnit, AudioUnitRenderActionFlags *
         if (mixL > 1.0f) mixL = 1.0f; if (mixL < -1.0f) mixL = -1.0f;
         if (mixR > 1.0f) mixR = 1.0f; if (mixR < -1.0f) mixR = -1.0f;
 
+        // ESCRITURA SEGURA
         if (isInterleaved) {
-            if (frame * 2 + 1 < samplesPerBuffer) {
-                buf0[frame * 2] = (SInt16)(mixL * 32767.0f);
-                buf0[frame * 2 + 1] = (SInt16)(mixR * 32767.0f);
-            }
+            buf0[frame * 2] = (SInt16)(mixL * 32767.0f);
+            buf0[frame * 2 + 1] = (SInt16)(mixR * 32767.0f);
         } else {
             buf0[frame] = (SInt16)(mixL * 32767.0f);
             if (buf1) buf1[frame] = (SInt16)(mixR * 32767.0f);
